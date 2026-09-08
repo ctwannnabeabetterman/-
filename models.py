@@ -82,3 +82,16 @@ class DelayEstimate:
     qls_valid: bool
     boundary_hit: bool
     fraction_clipped: bool
+
+
+@dataclass(frozen=True)
+class QLSCalibration:
+    """由当前波形离线生成的 QLS 周期偏差校正表，坐标单位为样点。"""
+
+    signature: str
+    true_fraction_samples: FloatArray
+    raw_fraction_samples: FloatArray
+    estimated_axis_samples: FloatArray
+    bias_samples: FloatArray
+    corrected_error_samples: FloatArray
+    grid_points: int
