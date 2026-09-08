@@ -165,3 +165,40 @@ class FrequencySyncConfig:
             raise ValueError("amplitude 必须大于 0")
         if not 0.0 <= self.tracker_alpha < 1.0:
             raise ValueError("tracker_alpha 必须位于 [0, 1) 内")
+
+
+@dataclass(frozen=True)
+class BeamformingConfig:
+    """两 AP 下行相干合成的传播、同步误差和功率配置。"""
+
+    ap0_propagation_delay_s: float = 50e-9
+    ap1_propagation_delay_s: float = 50e-9
+    ap0_amplitude: float = 1.0
+    ap1_amplitude: float = 1.0
+    ap0_channel_phase_rad: float = 0.2
+    ap1_channel_phase_rad: float = -0.6
+    ap1_clock_offset_s: float = 12.25e-9
+    ap1_cfo_hz: float = 600.0
+    ap1_initial_phase_rad: float = 1.1
+    normalization: str = "per_ap_fixed"
+
+    def __post_init__(self) -> None:
+        values = (
+            self.ap0_propagation_delay_s,
+            self.ap1_propagation_delay_s,
+            self.ap0_amplitude,
+            self.ap1_amplitude,
+            self.ap0_channel_phase_rad,
+            self.ap1_channel_phase_rad,
+            self.ap1_clock_offset_s,
+            self.ap1_cfo_hz,
+            self.ap1_initial_phase_rad,
+        )
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("波束赋形配置必须为有限数")
+        if self.ap0_propagation_delay_s < 0.0 or self.ap1_propagation_delay_s < 0.0:
+            raise ValueError("传播时延必须为非负数")
+        if self.ap0_amplitude < 0.0 or self.ap1_amplitude < 0.0:
+            raise ValueError("信道幅度必须为非负数")
+        if self.normalization not in {"per_ap_fixed", "total_fixed"}:
+            raise ValueError("normalization 必须为 per_ap_fixed 或 total_fixed")

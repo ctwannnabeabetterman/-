@@ -164,3 +164,30 @@ class FrequencyEstimate:
     unwrapped_phase_rad: FloatArray
     fitted_phase_rad: FloatArray
     residual_phase_rms_rad: float
+
+
+@dataclass(frozen=True)
+class BeamformingMetrics:
+    """联合接收功率相对三种参考功率的 dB 指标。"""
+
+    gain_vs_single_ap_db: float
+    gain_vs_incoherent_sum_db: float
+    normalized_ideal_loss_db: float
+    single_ap_reference_power: float
+    incoherent_sum_power: float
+    ideal_coherent_power: float
+
+
+@dataclass(frozen=True)
+class BeamformingResult:
+    """一个同步状态下的两路贡献、合成波形和残余误差。"""
+
+    state_name: str
+    received_samples: ComplexArray
+    ap0_contribution: ComplexArray
+    ap1_contribution: ComplexArray
+    signal_power: float
+    residual_arrival_difference_s: float
+    residual_frequency_offset_hz: float
+    residual_phase_difference_rad: float
+    metrics: BeamformingMetrics
