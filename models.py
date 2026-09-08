@@ -11,6 +11,7 @@ from numpy.typing import NDArray
 ComplexArray = NDArray[np.complex128]
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
+IntArray = NDArray[np.int64]
 
 
 @dataclass(frozen=True)
@@ -51,3 +52,33 @@ class PropagationResult:
     noise_samples: ComplexArray
     sample_rate_hz: float
     measured_snr_db: float | None
+
+
+@dataclass(frozen=True)
+class CorrelationResult:
+    """FFT 线性互相关结果。
+
+    ``lags_samples`` 是相对模板起点的有符号物理样点延迟，不能用
+    ``values`` 的数组下标代替。
+    """
+
+    values: ComplexArray
+    magnitude: FloatArray
+    lags_samples: IntArray
+    fft_length: int
+
+
+@dataclass(frozen=True)
+class DelayEstimate:
+    """整数峰值和 QLS 亚采样时延估计结果。"""
+
+    delay_s: float
+    integer_lag_samples: int
+    fractional_offset_samples: float
+    raw_fractional_offset_samples: float
+    peak_array_index: int
+    peak_magnitude: float
+    qls_denominator: float
+    qls_valid: bool
+    boundary_hit: bool
+    fraction_clipped: bool
