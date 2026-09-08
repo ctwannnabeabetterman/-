@@ -115,3 +115,53 @@ class ClockTrackingConfig:
             or self.random_walk_std_s_per_sqrt_s < 0.0
         ):
             raise ValueError("随机游走强度必须为非负有限数")
+
+
+@dataclass(frozen=True)
+class FrequencySyncConfig:
+    """软件等效频率参考、分段相位估计和跟踪参数。"""
+
+    sample_rate_hz: float = 200e6
+    reference_frequency_hz: float = 10e6
+    observation_duration_s: float = 2e-3
+    segment_duration_s: float = 50e-6
+    cfo_hz: float = 500.0
+    sample_clock_offset_fraction: float = 0.0
+    initial_phase_rad: float = 0.7
+    amplitude: float = 1.0
+    snr_db: float = 30.0
+    tracker_alpha: float = 0.85
+
+    def __post_init__(self) -> None:
+        values = (
+            self.sample_rate_hz,
+            self.reference_frequency_hz,
+            self.observation_duration_s,
+            self.segment_duration_s,
+            self.cfo_hz,
+            self.sample_clock_offset_fraction,
+            self.initial_phase_rad,
+            self.amplitude,
+            self.snr_db,
+            self.tracker_alpha,
+        )
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("频率同步配置必须为有限数")
+        if self.sample_rate_hz <= 0.0:
+            raise ValueError("sample_rate_hz 必须大于 0")
+        if self.reference_frequency_hz <= 0.0:
+            raise ValueError("reference_frequency_hz 必须大于 0")
+        if abs(self.reference_frequency_hz + self.cfo_hz) >= self.sample_rate_hz / 2.0:
+            raise ValueError("参考信号必须位于复基带 Nyquist 区间内")
+        if self.sample_clock_offset_fraction <= -1.0:
+            raise ValueError("sample_clock_offset_fraction 必须大于 -1")
+        if self.observation_duration_s <= 0.0 or self.segment_duration_s <= 0.0:
+            raise ValueError("观测时长和分段时长必须大于 0")
+        if self.segment_duration_s > self.observation_duration_s:
+            raise ValueError("segment_duration_s 不能超过 observation_duration_s")
+        if round(self.segment_duration_s * self.sample_rate_hz) < 2:
+            raise ValueError("每个频率估计分段至少需要两个样点")
+        if self.amplitude <= 0.0:
+            raise ValueError("amplitude 必须大于 0")
+        if not 0.0 <= self.tracker_alpha < 1.0:
+            raise ValueError("tracker_alpha 必须位于 [0, 1) 内")

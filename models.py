@@ -141,3 +141,26 @@ class ClockTrackingResult:
     residual_before_s: FloatArray
     residual_after_s: FloatArray
     random_walk_accumulated_s: FloatArray
+
+
+@dataclass(frozen=True)
+class FrequencyReferenceObservation:
+    """AP1 对名义参考信号的采样观测。"""
+
+    samples: ComplexArray
+    clean_samples: ComplexArray
+    nominal_time_s: FloatArray
+    true_observed_offset_hz: float
+    measured_snr_db: float
+
+
+@dataclass(frozen=True)
+class FrequencyEstimate:
+    """由分段相位最小二乘拟合得到的频偏结果。"""
+
+    frequency_offset_hz: float
+    phase_intercept_rad: float
+    segment_times_s: FloatArray
+    unwrapped_phase_rad: FloatArray
+    fitted_phase_rad: FloatArray
+    residual_phase_rms_rad: float
