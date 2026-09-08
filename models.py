@@ -128,3 +128,16 @@ class TwoWayEstimate:
     symmetric_propagation_delay_s: float
     forward_interval_s: float
     reverse_interval_s: float
+
+
+@dataclass(frozen=True)
+class ClockTrackingResult:
+    """多轮同步的真值、估计、校正和残差时间序列，单位均为秒。"""
+
+    epoch_true_s: FloatArray
+    raw_offset_s: FloatArray
+    estimated_offset_s: FloatArray
+    applied_correction_s: FloatArray
+    residual_before_s: FloatArray
+    residual_after_s: FloatArray
+    random_walk_accumulated_s: FloatArray

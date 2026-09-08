@@ -92,3 +92,26 @@ class TwoWayConfig:
             raise ValueError("粗传播时延必须为非负数")
         if self.gate_half_width_samples < 1.0:
             raise ValueError("gate_half_width_samples 至少为 1")
+
+
+@dataclass(frozen=True)
+class ClockTrackingConfig:
+    """周期双向同步和随机游走配置。"""
+
+    rounds: int = 20
+    sync_interval_s: float = 50e-3
+    correction_gain: float = 1.0
+    random_walk_std_s_per_sqrt_s: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.rounds < 1:
+            raise ValueError("rounds 至少为 1")
+        if not math.isfinite(self.sync_interval_s) or self.sync_interval_s <= 0.0:
+            raise ValueError("sync_interval_s 必须为正有限数")
+        if not math.isfinite(self.correction_gain) or not 0.0 < self.correction_gain <= 1.0:
+            raise ValueError("correction_gain 必须位于 (0, 1] 内")
+        if (
+            not math.isfinite(self.random_walk_std_s_per_sqrt_s)
+            or self.random_walk_std_s_per_sqrt_s < 0.0
+        ):
+            raise ValueError("随机游走强度必须为非负有限数")
