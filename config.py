@@ -64,3 +64,31 @@ class ChannelConfig:
             raise ValueError("snr_db 必须为有限数或 None")
         if self.fractional_delay_guard_samples < 16:
             raise ValueError("fractional_delay_guard_samples 至少为 16")
+
+
+@dataclass(frozen=True)
+class TwoWayConfig:
+    """一次双向时间传递历元的公开调度和粗搜索参数。"""
+
+    tx1_local_time_s: float = 1e-3
+    processing_delay_s: float = 20e-6
+    coarse_up_delay_s: float = 50e-9
+    coarse_down_delay_s: float = 50e-9
+    gate_half_width_samples: float = 2.5
+
+    def __post_init__(self) -> None:
+        values = (
+            self.tx1_local_time_s,
+            self.processing_delay_s,
+            self.coarse_up_delay_s,
+            self.coarse_down_delay_s,
+            self.gate_half_width_samples,
+        )
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("双向时间传递配置必须为有限数")
+        if self.processing_delay_s < 0.0:
+            raise ValueError("processing_delay_s 必须为非负数")
+        if self.coarse_up_delay_s < 0.0 or self.coarse_down_delay_s < 0.0:
+            raise ValueError("粗传播时延必须为非负数")
+        if self.gate_half_width_samples < 1.0:
+            raise ValueError("gate_half_width_samples 至少为 1")

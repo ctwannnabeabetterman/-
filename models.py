@@ -95,3 +95,36 @@ class QLSCalibration:
     bias_samples: FloatArray
     corrected_error_samples: FloatArray
     grid_points: int
+
+
+@dataclass(frozen=True)
+class LinkDelayMeasurement:
+    """单向波形时延测量，时间单位为秒。"""
+
+    raw_estimate: DelayEstimate
+    corrected_delay_s: float
+    lut_adjustment_samples: float
+    measured_snr_db: float | None
+
+
+@dataclass(frozen=True)
+class TwoWayObservation:
+    """一次双向交换保存的四个本地时间戳和波形测量。"""
+
+    t_tx1_s: float
+    t_rx0_s: float
+    t_tx0_s: float
+    t_rx1_s: float
+    up_measurement: LinkDelayMeasurement
+    down_measurement: LinkDelayMeasurement
+
+
+@dataclass(frozen=True)
+class TwoWayEstimate:
+    """双向时间传递输出；clock_correction_s 应加到 AP1 本地时钟。"""
+
+    clock_correction_s: float
+    ap1_offset_estimate_s: float
+    symmetric_propagation_delay_s: float
+    forward_interval_s: float
+    reverse_interval_s: float
