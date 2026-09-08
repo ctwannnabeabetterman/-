@@ -202,3 +202,31 @@ class BeamformingConfig:
             raise ValueError("信道幅度必须为非负数")
         if self.normalization not in {"per_ap_fixed", "total_fixed"}:
             raise ValueError("normalization 必须为 per_ap_fixed 或 total_fixed")
+
+
+@dataclass(frozen=True)
+class MonteCarloConfig:
+    """SNR 扫描、随机种子和统计次数配置。"""
+
+    snr_db_values: tuple[float, ...] = tuple(float(value) for value in range(6, 37, 3))
+    trials_per_snr: int = 100
+    seed: int = 2023
+    nominal_delay_samples: int = 24
+    gate_half_width_samples: float = 2.5
+    noise_bandwidth_hz: float | None = None
+
+    def __post_init__(self) -> None:
+        if len(self.snr_db_values) == 0:
+            raise ValueError("snr_db_values 不能为空")
+        if not all(math.isfinite(value) for value in self.snr_db_values):
+            raise ValueError("SNR 扫描值必须为有限数")
+        if self.trials_per_snr < 1:
+            raise ValueError("trials_per_snr 至少为 1")
+        if self.nominal_delay_samples < 4:
+            raise ValueError("nominal_delay_samples 至少为 4")
+        if not math.isfinite(self.gate_half_width_samples) or self.gate_half_width_samples < 1.0:
+            raise ValueError("gate_half_width_samples 至少为 1")
+        if self.noise_bandwidth_hz is not None and (
+            not math.isfinite(self.noise_bandwidth_hz) or self.noise_bandwidth_hz <= 0.0
+        ):
+            raise ValueError("noise_bandwidth_hz 必须为正有限数或 None")

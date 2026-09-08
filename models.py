@@ -191,3 +191,30 @@ class BeamformingResult:
     residual_frequency_offset_hz: float
     residual_phase_difference_rad: float
     metrics: BeamformingMetrics
+
+
+@dataclass(frozen=True)
+class CRLBResult:
+    """一个活动区每样点 SNR 对应的双音时延理论下界。"""
+
+    std_s: float
+    variance_s2: float
+    signal_energy: float
+    noise_psd: float
+    noise_bandwidth_hz: float
+    active_sample_snr_db: float
+    pulse_energy_snr_linear: float
+    mean_squared_angular_bandwidth_rad2_s2: float
+
+
+@dataclass(frozen=True)
+class MonteCarloResult:
+    """各 SNR 点的时延、钟差和两 AP 相干合成统计。"""
+
+    snr_db: FloatArray
+    integer_peak_rmse_s: FloatArray
+    qls_rmse_s: FloatArray
+    lut_rmse_s: FloatArray
+    crlb_std_s: FloatArray
+    clock_offset_rmse_s: FloatArray
+    coherent_gain_vs_incoherent_db: FloatArray
