@@ -187,8 +187,8 @@ Monte Carlo 的每个 trial 都执行正式的 `simulate_two_way_exchange()` 和
 在固定种子 `2023` 的当前实现中，`fast_demo` 的一次完整运行得到：
 
 - 无噪声 401 点 LUT：原始 QLS 最大系统偏差约 `32.56 ps`，LUT 训练网格残差为浮点精度量级；
-- 36 dB Monte Carlo：整数峰值 RMSE 约 `1404.9 ps`，QLS 约 `23.8 ps`，QLS+LUT 约 `4.55 ps`，CRLB 标准差约 `4.46 ps`；
-- 36 dB 完整四时间戳双向钟差 RMSE 约 `3.16 ps`，波形级导频反馈与数据合成增益约 `3.00 dB`；
+- 36 dB Monte Carlo：整数峰值 RMSE 约 `1557.5 ps`，QLS 约 `23.2 ps`，QLS+LUT 约 `4.27 ps`，CRLB 标准差约 `4.46 ps`；
+- 36 dB 完整四时间戳双向钟差 RMSE 约 `3.34 ps`，波形级导频反馈与数据合成增益约 `3.00 dB`；
 - 完整同步后相对两 AP 非相干功率和的增益约 `3.00 dB`，归一化理想损失接近 `0 dB`；
 - Demo 时钟跟踪末轮补偿残差约 `2 ps`，采样时钟频差由观测斜率闭环校正；本振频率跟踪把约 `600 Hz` 偏移降到约 `0.01 Hz`。
 

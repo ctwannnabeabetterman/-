@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.12, NumPy, SciPy, unittest
 
+**Status:** Implemented and verified on 2026-09-09; 74 unit tests and both result-acceptance modes pass.
+
 ---
 
 ### Task 1: Observable clock-rate time base
@@ -100,4 +102,3 @@ Run `verify.ps1 -Mode fast_demo`, then run `main_demo.py --mode formal --output-
 - [ ] **Step 3: Commit and push**
 
 Commit the tested source, tests, and documentation, then push `main` to `origin/main`.
-
