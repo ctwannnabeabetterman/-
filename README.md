@@ -80,7 +80,7 @@ results/<mode>/
 T_n(t) = t + delta_n + epsilon_n * t + nu_n(t)
 ```
 
-AP0 取 `delta_0 = epsilon_0 = 0`。`ClockPlantConfig` 保存未控制真值，`LocalClock.offset_s` 和 `fractional_frequency_offset` 只供事件仿真器生成观测。算法通过多轮双向残差估计重建原始钟差曲线，拟合其斜率得到无量纲采样时钟频差，并更新独立的 `time_correction_s` 和 `fractional_frequency_correction`。频率控制在指定真时刻保持本地时间连续。
+AP0 取 `delta_0 = epsilon_0 = 0`。`ClockPlantConfig` 保存未控制真值，`LocalClock.offset_s` 和 `fractional_frequency_offset` 只供事件仿真器生成观测。算法通过多轮双向残差估计重建原始钟差曲线，以每次交换的 AP0 接收/回复时间戳中点作为可观测参考历元，拟合斜率得到无量纲采样时钟频差，并更新独立的 `time_correction_s` 和 `fractional_frequency_correction`。`epoch_true_s` 只用于仿真诊断和控制生效时刻，不会进入频差估计器。
 
 ### 脉冲双音与分数时延
 
@@ -150,7 +150,7 @@ Hz 制载波频偏不会写入无量纲的 `LocalClock`。项目使用单独的 
 h_i = a_i * exp(-j*2*pi*f_c*tau_i + j*theta_i)
 ```
 
-AP1 初始本振相位来自 `LocalOscillator`。RX 分时接收 QPSK 导频，用 LS 估计 `h_0`、`h_1`。AP1 导频与数据共用同一残余钟差、本振频偏和连续相位轨迹；导频模型还包含可配置 AWGN、反馈延迟、反馈相位量化和信道相位变化率。数据历元位于导频中心之后，因此残余频偏会自然形成反馈陈旧误差。反馈后计算
+AP1 初始本振相位来自 `LocalOscillator`。RX 分时接收 QPSK 导频，用 LS 估计 `h_0`、`h_1`。AP1 导频与数据共用同一残余钟差、本振频偏和连续相位轨迹；模型还包含可配置 AWGN、反馈延迟、反馈相位量化和信道相位变化率。信道相位变化率在数据历元同时表现为累积相位 `phase_rate * t` 和等效频偏 `phase_rate / (2*pi)`。数据历元位于导频中心之后，因此残余频偏和信道漂移会自然形成反馈陈旧误差。反馈后计算
 
 ```text
 w_i = exp(-j*angle(h_i_hat))
@@ -180,15 +180,15 @@ var(tau_hat) >= N0 / (2*zeta_f_squared*Es)
 
 因此 CRLB 和 Monte Carlo 使用相同的输入噪声定义。论文中的预处理 SNR 与这里的活动区每样点 SNR 不应直接混为同一数值。
 
-Monte Carlo 的每个 trial 都执行正式的 `simulate_two_way_exchange()` 和 `estimate_two_way()`，包含未知 AP1 钟差、四个本地时间戳、处理时延以及独立上下行 AWGN。`clock_offset_rmse_ps` 是完整双向时间传递闭环的统计量，不再由两次时延误差离线拼接。
+Monte Carlo 的每个 trial 都执行正式的 `simulate_two_way_exchange()` 和 `estimate_two_way()`，包含未知 AP1 钟差、四个本地时间戳、处理时延以及独立上下行 AWGN。`clock_offset_rmse_ps` 是完整双向时间传递闭环的统计量。每个 trial 随后还会生成带随机 AP1 初相的 RX 导频、执行 LS 相位反馈，并用补偿后的钟差实际合成两路数据波形；`coherent_gain_vs_incoherent_db` 来自这些波形级合成结果的线性功率平均，不使用钟差到增益的解析捷径。
 
 ## 快速模式的参考结果
 
 在固定种子 `2023` 的当前实现中，`fast_demo` 的一次完整运行得到：
 
 - 无噪声 401 点 LUT：原始 QLS 最大系统偏差约 `32.56 ps`，LUT 训练网格残差为浮点精度量级；
-- 36 dB Monte Carlo：整数峰值 RMSE 约 `1404.9 ps`，QLS 约 `23.9 ps`，QLS+LUT 约 `4.63 ps`，CRLB 标准差约 `4.46 ps`；
-- 36 dB 完整四时间戳双向钟差 RMSE 约 `3.09 ps`；
+- 36 dB Monte Carlo：整数峰值 RMSE 约 `1404.9 ps`，QLS 约 `23.8 ps`，QLS+LUT 约 `4.55 ps`，CRLB 标准差约 `4.46 ps`；
+- 36 dB 完整四时间戳双向钟差 RMSE 约 `3.16 ps`，波形级导频反馈与数据合成增益约 `3.00 dB`；
 - 完整同步后相对两 AP 非相干功率和的增益约 `3.00 dB`，归一化理想损失接近 `0 dB`；
 - Demo 时钟跟踪末轮补偿残差约 `2 ps`，采样时钟频差由观测斜率闭环校正；本振频率跟踪把约 `600 Hz` 偏移降到约 `0.01 Hz`。
 
@@ -244,7 +244,7 @@ Monte Carlo 的每个 trial 都执行正式的 `simulate_two_way_exchange()` 和
 & "C:\Users\ct183\anaconda3\envs\gpu_torch\python.exe" -m unittest discover -s tests -v
 ```
 
-测试覆盖分数时延的正负号和零填充、相关 lag、QLS 边界保护、LUT 周期插值和缓存签名、处理时延抵消、链路非对称项、时钟漂移、频率估计与补偿、信道 LS、两种功率归一化、CRLB 量纲和 Monte Carlo 可复现性。
+测试覆盖分数时延的正负号和零填充、相关 lag、QLS 边界保护、LUT 周期插值和缓存签名、处理时延抵消、链路非对称项、时钟漂移、频率估计与补偿、信道 LS、两种功率归一化、CRLB 量纲和 Monte Carlo 可复现性。额外回归测试确保频差估计不读取诊断真时间、非零信道相位漂移在导频和数据中一致，并确认每次 Monte Carlo 试验实际执行导频反馈和数据合成。
 
 `test_closed_loop_state.py` 检查 plant/控制接口隔离、时钟和本振校正连续性；`test_phase_feedback.py` 检查导频与数据共用本振轨迹及反馈延迟；端到端测试检查实际施加的控制值严格等于估计器输出。`acceptance_thresholds.json` 保存版本化阈值，`verify_results.py` 检查全部图、LUT 趋势、Monte Carlo 估计器次序、残余误差和相干增益。
 

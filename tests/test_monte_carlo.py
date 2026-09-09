@@ -8,8 +8,10 @@ from unittest.mock import patch
 import numpy as np
 
 from config import MonteCarloConfig, WaveformConfig
+from beamforming import combine_two_ap as real_combine_two_ap
 from lut_calibration import build_qls_lut
 from monte_carlo import run_delay_monte_carlo
+from phase_sync import simulate_channel_feedback as real_simulate_channel_feedback
 from two_way_sync import simulate_two_way_exchange as real_simulate_two_way_exchange
 
 
@@ -81,6 +83,28 @@ class MonteCarloTests(unittest.TestCase):
             )
 
         self.assertEqual(exchange.call_count, config.trials_per_snr)
+
+    def test_gain_executes_feedback_and_data_combining_per_trial(self) -> None:
+        config = MonteCarloConfig(
+            snr_db_values=(30.0,),
+            trials_per_snr=3,
+            seed=96,
+        )
+        with patch(
+            "monte_carlo.simulate_channel_feedback",
+            wraps=real_simulate_channel_feedback,
+        ) as feedback, patch(
+            "monte_carlo.combine_two_ap",
+            wraps=real_combine_two_ap,
+        ) as combine:
+            run_delay_monte_carlo(
+                self.waveform_config,
+                self.calibration,
+                config,
+            )
+
+        self.assertEqual(feedback.call_count, config.trials_per_snr)
+        self.assertEqual(combine.call_count, config.trials_per_snr)
 
     def test_processing_delay_does_not_change_fixed_seed_clock_rmse(self) -> None:
         base = dict(snr_db_values=(30.0,), trials_per_snr=10, seed=95)

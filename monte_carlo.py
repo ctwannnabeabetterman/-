@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 
+from beamforming import combine_two_ap
 from clock_model import LocalClock
-from config import ChannelConfig, MonteCarloConfig, TwoWayConfig, WaveformConfig
+from config import (
+    BeamformingConfig,
+    ChannelConfig,
+    MonteCarloConfig,
+    PhaseFeedbackConfig,
+    TwoWayConfig,
+    WaveformConfig,
+)
 from crlb import crlb_for_waveform
 from models import MonteCarloResult, QLSCalibration
+from oscillator_model import LocalOscillator
+from phase_sync import compute_phase_weights, simulate_channel_feedback
 from two_way_sync import estimate_two_way, simulate_two_way_exchange
 from waveforms import generate_two_tone
 
@@ -16,15 +28,21 @@ def run_delay_monte_carlo(
     waveform_config: WaveformConfig,
     calibration: QLSCalibration,
     config: MonteCarloConfig,
+    *,
+    beamforming_config: BeamformingConfig | None = None,
+    phase_feedback_config: PhaseFeedbackConfig | None = None,
 ) -> MonteCarloResult:
     """在 ``6:3:36 dB`` 等可配 SNR 轴上执行固定种子的完整统计。
 
     每个 trial 都调用正式的四时间戳交换和双向估计器。上下行使用同一真传播
     时延和独立 AWGN，AP1 具有未知真钟差，处理时延通过时间戳公式抵消。估计
-    钟差残差在载频处转为相位误差，用于统计两 AP 相干增益。
+    钟差补偿后，每个 trial 继续生成 RX 导频、计算反馈权重并合成数据波形，
+    由实际合成功率统计两 AP 相干增益。
     """
 
     waveform = generate_two_tone(waveform_config)
+    beamforming = beamforming_config or BeamformingConfig()
+    phase_feedback = phase_feedback_config or PhaseFeedbackConfig()
     snr_axis = np.asarray(config.snr_db_values, dtype=np.float64)
     count = snr_axis.size
     integer_rmse = np.empty(count, dtype=np.float64)
@@ -41,6 +59,7 @@ def run_delay_monte_carlo(
         qls_errors = np.empty(config.trials_per_snr, dtype=np.float64)
         lut_errors = np.empty(config.trials_per_snr, dtype=np.float64)
         clock_errors = np.empty(config.trials_per_snr, dtype=np.float64)
+        coherent_gain_linear = np.empty(config.trials_per_snr, dtype=np.float64)
 
         for trial_index, fraction in enumerate(fractions):
             delay_samples = config.nominal_delay_samples + float(fraction)
@@ -81,16 +100,57 @@ def run_delay_monte_carlo(
             clock_errors[trial_index] = (
                 clock_estimate.ap1_offset_estimate_s - config.clock_offset_truth_s
             )
+            residual_clock_s = (
+                config.clock_offset_truth_s - clock_estimate.ap1_offset_estimate_s
+            )
+            oscillator = LocalOscillator(
+                frequency_offset_hz=0.0,
+                initial_phase_rad=float(rng.uniform(-np.pi, np.pi)),
+            )
+            trial_feedback = replace(phase_feedback, snr_db=float(snr_db))
+            pilot_epoch_s = two_way.tx1_local_time_s + 1e-3
+            feedback = simulate_channel_feedback(
+                waveform_config,
+                beamforming,
+                trial_feedback,
+                oscillator,
+                residual_clock_offset_s=residual_clock_s,
+                pilot_epoch_s=pilot_epoch_s,
+                rng=rng,
+            )
+            weights = compute_phase_weights(
+                feedback.feedback_channel_estimates,
+                beamforming.normalization,
+            )
+            channel_frequency_offset_hz = (
+                trial_feedback.channel_phase_rate_rad_per_s / (2.0 * np.pi)
+            )
+            full_sync = combine_two_ap(
+                waveform.samples,
+                waveform_config.sample_rate_hz,
+                np.array(
+                    [
+                        beamforming.ap0_propagation_delay_s,
+                        beamforming.ap1_propagation_delay_s - residual_clock_s,
+                    ],
+                    dtype=np.float64,
+                ),
+                feedback.true_effective_channels_at_data,
+                weights,
+                channel_frequency_offset_hz,
+                "full_sync_monte_carlo",
+            )
+            coherent_gain_linear[trial_index] = 10.0 ** (
+                full_sync.metrics.gain_vs_incoherent_sum_db / 10.0
+            )
 
         integer_rmse[snr_index] = float(np.sqrt(np.mean(integer_errors**2)))
         qls_rmse[snr_index] = float(np.sqrt(np.mean(qls_errors**2)))
         lut_rmse[snr_index] = float(np.sqrt(np.mean(lut_errors**2)))
         clock_rmse[snr_index] = float(np.sqrt(np.mean(clock_errors**2)))
-        residual_phase_rad = (
-            2.0 * np.pi * waveform_config.carrier_frequency_hz * clock_errors
+        coherent_gain[snr_index] = float(
+            10.0 * np.log10(np.mean(coherent_gain_linear))
         )
-        gain_linear = np.abs(1.0 + np.exp(1j * residual_phase_rad)) ** 2 / 2.0
-        coherent_gain[snr_index] = float(10.0 * np.log10(np.mean(gain_linear)))
         crlb_std[snr_index] = crlb_for_waveform(
             waveform,
             waveform_config.tone_separation_hz,

@@ -438,6 +438,8 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         settings.waveform,
         calibration,
         settings.monte_carlo,
+        beamforming_config=settings.beamforming,
+        phase_feedback_config=settings.phase_feedback,
     )
 
     raw_lut_bias = np.asarray(
