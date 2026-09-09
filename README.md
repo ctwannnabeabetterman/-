@@ -42,6 +42,14 @@ cd "E:\研究生\研究生科研相关\分布式系统波束赋形\distributed_b
 
 ## 输出文件
 
+最终代码可用性审查、原文图 12 的参数对应及本次实验结论见 [FINAL_REVIEW.md](FINAL_REVIEW.md)。图 12 三配置软件实验可单独运行：
+
+```powershell
+& "C:\Users\ct183\anaconda3\envs\gpu_torch\python.exe" paper_fig12.py --trials 1000 --output-dir results\final_review
+```
+
+该图采用标准差而非 RMSE；参考时钟和读出抖动为可配置的软件假设，不代表原文硬件实测曲线。参数、原始测量及汇总结果随图保存。
+
 默认输出到 `results/fast_demo/` 或 `results/formal/`。`results/` 已加入 `.gitignore`，运行结果不会污染源码提交。
 
 ```text
