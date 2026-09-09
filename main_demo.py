@@ -404,14 +404,27 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         rng=rng,
     )
     data_epoch_s = channel_feedback.data_epoch_s
+    channel_phase_rate_rad_per_s = (
+        settings.phase_feedback.channel_phase_rate_rad_per_s
+    )
+    channel_phase_at_data_rad = channel_phase_rate_rad_per_s * data_epoch_s
+    channel_frequency_offset_hz = channel_phase_rate_rad_per_s / (2.0 * np.pi)
     plant_state = BeamformingPlantState(
         data_epoch_s=data_epoch_s,
         raw_clock_offset_s=ap1_clock.raw_offset_at(data_epoch_s),
         residual_clock_offset_s=ap1_clock.residual_offset_at(data_epoch_s),
-        raw_frequency_offset_hz=oscillator.frequency_offset_hz,
-        residual_frequency_offset_hz=oscillator.residual_frequency_offset_hz,
-        raw_ap1_phase_rad=oscillator.raw_phase_at(data_epoch_s),
-        residual_ap1_phase_rad=oscillator.phase_at(data_epoch_s),
+        raw_frequency_offset_hz=(
+            oscillator.frequency_offset_hz + channel_frequency_offset_hz
+        ),
+        residual_frequency_offset_hz=(
+            oscillator.residual_frequency_offset_hz + channel_frequency_offset_hz
+        ),
+        raw_ap1_phase_rad=(
+            oscillator.raw_phase_at(data_epoch_s) + channel_phase_at_data_rad
+        ),
+        residual_ap1_phase_rad=(
+            oscillator.phase_at(data_epoch_s) + channel_phase_at_data_rad
+        ),
     )
     beamforming_states = simulate_four_sync_states(
         waveform.samples,

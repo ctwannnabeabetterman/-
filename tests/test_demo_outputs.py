@@ -80,6 +80,40 @@ class DemoSettingsTests(unittest.TestCase):
             states["time_frequency"]["normalized_ideal_loss_db"],
         )
 
+    def test_time_varying_channel_is_shared_by_pilot_and_data(self) -> None:
+        base = build_demo_settings("fast_demo")
+        settings = replace(
+            base,
+            lut_grid_points=101,
+            frequency_rounds=3,
+            clock_tracking=ClockTrackingConfig(
+                rounds=5,
+                sync_interval_s=50e-3,
+                correction_gain=1.0,
+                random_walk_std_s_per_sqrt_s=0.0,
+            ),
+            phase_feedback=PhaseFeedbackConfig(
+                pilot_symbols=256,
+                snr_db=100.0,
+                feedback_delay_s=100e-6,
+                phase_quantization_bits=None,
+                channel_phase_rate_rad_per_s=10.0,
+            ),
+            monte_carlo=MonteCarloConfig(
+                snr_db_values=(30.0,),
+                trials_per_snr=2,
+                seed=2023,
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            summary = run_demo(settings, directory)
+
+        self.assertLess(
+            summary["beamforming"]["full_sync"]["normalized_ideal_loss_db"],
+            0.05,
+        )
+
 
 class ResultWriterTests(unittest.TestCase):
     """验证 NumPy 数值可写入可读 JSON 和列式 CSV。"""
