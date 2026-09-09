@@ -9,6 +9,8 @@ Demo 比较四种状态：
 - `time_frequency`：再应用参考信号相位斜率得到的频偏校正；
 - `full_sync`：再应用 RX 导频 LS 复信道估计得到的相位权重。
 
+仿真真值、估计器输出和控制状态使用不同的数据结构。真值只用于 plant 生成 IQ、未同步基准和运行后误差统计；时间、采样时钟频率、本振频率和发射相位分别由双向估计、钟差斜率估计、参考信号跟踪和 RX 导频反馈驱动。`simulate_four_sync_states()` 不再接收裸时间或频率估计量，只读取控制生效后的 `BeamformingPlantState` 快照。
+
 ## 直接运行
 
 项目固定使用现有环境，不需要也不会修改环境：
@@ -30,6 +32,12 @@ cd "E:\研究生\研究生科研相关\分布式系统波束赋形\distributed_b
 & "C:\Users\ct183\anaconda3\envs\gpu_torch\python.exe" main_demo.py --mode fast_demo --output-dir results\my_run
 ```
 
+测试、运行和阈值验收可以由一条命令完成：
+
+```powershell
+.\verify.ps1 -Mode fast_demo
+```
+
 随机种子固定为 `2023`。同一模式和代码版本会生成相同的数值 CSV 与 JSON。Matplotlib 的 PDF 元数据可能随运行时间变化，不作为逐字节复现对象。
 
 ## 输出文件
@@ -39,7 +47,7 @@ cd "E:\研究生\研究生科研相关\分布式系统波束赋形\distributed_b
 ```text
 results/<mode>/
 ├── run_config.json              # 本次运行的全部配置
-├── summary.json                 # 主要结论和单位化指标
+├── summary.json                 # 运行环境、状态来源、主要结论和单位化指标
 ├── manifest.json                # 输出文件清单
 ├── lut_bias.csv                 # LUT 扫描真值、原始偏差、校正偏差
 ├── clock_tracking.csv           # 多轮钟差真值、估计、校正和残差
@@ -72,7 +80,7 @@ results/<mode>/
 T_n(t) = t + delta_n + epsilon_n * t + nu_n(t)
 ```
 
-AP0 取 `delta_0 = epsilon_0 = 0`。`LocalClock.offset_s` 和 `fractional_frequency_offset` 只供事件仿真器生成观测；算法只能更新独立的 `time_correction_s` 和 `fractional_frequency_correction`。保存的真值用于误差统计，不会作为估计器输入。
+AP0 取 `delta_0 = epsilon_0 = 0`。`ClockPlantConfig` 保存未控制真值，`LocalClock.offset_s` 和 `fractional_frequency_offset` 只供事件仿真器生成观测。算法通过多轮双向残差估计重建原始钟差曲线，拟合其斜率得到无量纲采样时钟频差，并更新独立的 `time_correction_s` 和 `fractional_frequency_correction`。频率控制在指定真时刻保持本地时间连续。
 
 ### 脉冲双音与分数时延
 
@@ -132,6 +140,8 @@ f_track[k] = alpha*f_track[k-1] + (1-alpha)*f_est[k]
 
 这是论文自混频锁频硬件的基带等效抽象，只验证频偏可观测性、估计符号、跟踪和数字补偿，不声称复现硬件相噪、混频杂散或 PLL 电路动态。
 
+Hz 制载波频偏不会写入无量纲的 `LocalClock`。项目使用单独的 `LocalOscillator` 保存本振真频偏、估计控制量和连续相位；最后一个跟踪估计通过 `apply_frequency_correction()` 真正更新本振状态，导频和波束赋形数据随后读取该状态的残余频偏和连续相位。
+
 ### RX 相位反馈与相干合成
 
 两路静态 LoS 复信道为
@@ -140,7 +150,7 @@ f_track[k] = alpha*f_track[k-1] + (1-alpha)*f_est[k]
 h_i = a_i * exp(-j*2*pi*f_c*tau_i + j*theta_i)
 ```
 
-AP1 初始本振相位作为其复信道的附加相位。RX 分时接收 1024 个 QPSK 导频样点，用 LS 估计 `h_0`、`h_1`，反馈后计算
+AP1 初始本振相位来自 `LocalOscillator`。RX 分时接收 QPSK 导频，用 LS 估计 `h_0`、`h_1`。AP1 导频与数据共用同一残余钟差、本振频偏和连续相位轨迹；导频模型还包含可配置 AWGN、反馈延迟、反馈相位量化和信道相位变化率。数据历元位于导频中心之后，因此残余频偏会自然形成反馈陈旧误差。反馈后计算
 
 ```text
 w_i = exp(-j*angle(h_i_hat))
@@ -170,15 +180,17 @@ var(tau_hat) >= N0 / (2*zeta_f_squared*Es)
 
 因此 CRLB 和 Monte Carlo 使用相同的输入噪声定义。论文中的预处理 SNR 与这里的活动区每样点 SNR 不应直接混为同一数值。
 
+Monte Carlo 的每个 trial 都执行正式的 `simulate_two_way_exchange()` 和 `estimate_two_way()`，包含未知 AP1 钟差、四个本地时间戳、处理时延以及独立上下行 AWGN。`clock_offset_rmse_ps` 是完整双向时间传递闭环的统计量，不再由两次时延误差离线拼接。
+
 ## 快速模式的参考结果
 
 在固定种子 `2023` 的当前实现中，`fast_demo` 的一次完整运行得到：
 
 - 无噪声 401 点 LUT：原始 QLS 最大系统偏差约 `32.56 ps`，LUT 训练网格残差为浮点精度量级；
-- 36 dB Monte Carlo：整数峰值 RMSE 约 `1404.9 ps`，QLS 约 `23.9 ps`，QLS+LUT 约 `4.6 ps`，CRLB 标准差约 `4.46 ps`；
-- 36 dB 双向钟差 RMSE 约 `3.46 ps`；
+- 36 dB Monte Carlo：整数峰值 RMSE 约 `1404.9 ps`，QLS 约 `23.9 ps`，QLS+LUT 约 `4.63 ps`，CRLB 标准差约 `4.46 ps`；
+- 36 dB 完整四时间戳双向钟差 RMSE 约 `3.09 ps`；
 - 完整同步后相对两 AP 非相干功率和的增益约 `3.00 dB`，归一化理想损失接近 `0 dB`；
-- Demo 时钟跟踪末轮补偿残差约 `2 ps`，频率跟踪把约 `599.5 Hz` 偏移降到约 `5.4 Hz`。
+- Demo 时钟跟踪末轮补偿残差约 `2 ps`，采样时钟频差由观测斜率闭环校正；本振频率跟踪把约 `600 Hz` 偏移降到约 `0.01 Hz`。
 
 这些数值用于回归和趋势检查。它们不是论文硬件 `2.26 ps` 实验结果的拟合目标；脉冲长度、SNR 定义、模拟信道、硬件噪声和测量链不同。
 
@@ -191,9 +203,12 @@ var(tau_hat) >= N0 / (2*zeta_f_squared*Es)
 | `WaveformConfig` | 采样率、双音间隔、脉冲、载频参数 | 200 MSa/s、40 MHz、10 µs、5.8 GHz |
 | `ChannelConfig` | 分数时延、幅度、相位、SNR | 静态单径 AWGN |
 | `TwoWayConfig` | 四时间戳调度、粗门 | 20 µs 处理时延、±2.5 样点门 |
+| `ClockPlantConfig` | 未控制 AP1 时钟真值 | 100 ns、0.2 ppm |
 | `ClockTrackingConfig` | 轮数、同步间隔、增益、随机游走 | 20 轮、50 ms |
 | `FrequencySyncConfig` | 参考频率、观测段、CFO、SFO、跟踪器 | 10 MHz、600 Hz |
-| `BeamformingConfig` | 两路 RX 信道、AP1 误差、功率归一化 | `per_ap_fixed` |
+| `OscillatorConfig` | 未控制 AP1 本振真值 | 600 Hz、1.1 rad |
+| `BeamformingConfig` | 两路 RX 静态信道和功率归一化 | `per_ap_fixed` |
+| `PhaseFeedbackConfig` | 导频、SNR、反馈延迟和量化 | 1024、32 dB、100 µs、12 bit |
 | `MonteCarloConfig` | SNR 轴、次数、种子、噪声带宽 | 6:3:36 dB、100、2023 |
 
 `build_demo_settings()` 只组合两套运行预设。算法函数不在内部改变配置。
@@ -207,6 +222,7 @@ var(tau_hat) >= N0 / (2*zeta_f_squared*Es)
 | `delay_estimator.py` | FFT 线性匹配滤波、物理 lag、三点 QLS |
 | `lut_calibration.py` | 周期偏差扫描、签名缓存、运行时校正 |
 | `clock_model.py` | 仿射本地时钟与独立算法校正状态 |
+| `oscillator_model.py` | 连续相位本振真值与 Hz 制控制状态 |
 | `two_way_sync.py` | 波形驱动的四时间戳双向时间传递 |
 | `experiments.py` | 多轮时间同步与随机游走跟踪 |
 | `frequency_sync.py` | 分段相位频偏估计、补偿、指数跟踪 |
@@ -217,6 +233,8 @@ var(tau_hat) >= N0 / (2*zeta_f_squared*Es)
 | `plotting.py` | 十组论文风格 PNG/PDF 图 |
 | `results_io.py` | JSON/CSV 序列化 |
 | `main_demo.py` | 配置、闭环编排、结果保存和 CLI |
+| `verify_results.py` | 机器可读结果阈值验收 |
+| `verify.ps1` | 测试、Demo 和结果验收的一键入口 |
 
 ## 测试
 
@@ -228,6 +246,10 @@ var(tau_hat) >= N0 / (2*zeta_f_squared*Es)
 
 测试覆盖分数时延的正负号和零填充、相关 lag、QLS 边界保护、LUT 周期插值和缓存签名、处理时延抵消、链路非对称项、时钟漂移、频率估计与补偿、信道 LS、两种功率归一化、CRLB 量纲和 Monte Carlo 可复现性。
 
+`test_closed_loop_state.py` 检查 plant/控制接口隔离、时钟和本振校正连续性；`test_phase_feedback.py` 检查导频与数据共用本振轨迹及反馈延迟；端到端测试检查实际施加的控制值严格等于估计器输出。`acceptance_thresholds.json` 保存版本化阈值，`verify_results.py` 检查全部图、LUT 趋势、Monte Carlo 估计器次序、残余误差和相干增益。
+
+项目声明 Python `>=3.10,<3.14`。`requirements.txt` 固定直接依赖，`requirements-lock.txt` 记录当前 Python 3.12 验证环境中本项目所需的最小传递依赖集合。开发约定见 `CONTRIBUTING.md`。
+
 ## 与论文硬件实验的边界
 
 当前版本保留论文时间同步算法的关键基带链路，但做了以下软件化处理：
@@ -235,9 +257,11 @@ var(tau_hat) >= N0 / (2*zeta_f_squared*Es)
 - 信道为静态单径 LoS 和 AWGN，没有多径、遮挡、移动目标和天线互耦；
 - 收发切换、线缆、RF 前端群时延和温漂未建模；
 - 频率同步是相位斜率估计，不包含双音自混频电路、模拟 PLL、相噪和杂散；
-- RX 信道反馈无通信时延，导频在一个静态相干区间内完成；
+- RX 导频反馈包含可配固定延迟和相位量化，但没有反馈丢包、随机网络排队或闭环协议重传；
+- 默认信道在一个导频到数据区间内静态，可用相位变化率做一阶漂移实验，但没有完整移动多径模型；
 - 时间戳为浮点秒制事件，不包含 FPGA 计数器量化、DMA 和操作系统延迟；
 - CRLB 使用理想已知波形、AWGN 和无干扰假设；LUT 训练网格上的接近零残差不代表噪声下估计无误差。
+- 论文的三种 SDR/测试配置没有伪装成软件配置预设；当前两个模式只用于计算量切换，并不代表论文硬件配置。
 
 ## 数值注意事项
 

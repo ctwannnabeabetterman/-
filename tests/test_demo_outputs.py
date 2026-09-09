@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
@@ -10,7 +11,8 @@ import unittest
 
 import numpy as np
 
-from main_demo import build_demo_settings
+from config import ClockTrackingConfig, MonteCarloConfig, PhaseFeedbackConfig
+from main_demo import build_demo_settings, run_demo
 from results_io import write_csv_columns, write_json
 
 
@@ -30,6 +32,53 @@ class DemoSettingsTests(unittest.TestCase):
         self.assertEqual(settings.waveform.pulse_duration_s, 10e-6)
         self.assertEqual(settings.lut_grid_points, 2001)
         self.assertEqual(settings.monte_carlo.trials_per_snr, 1000)
+
+    def test_small_end_to_end_run_applies_estimator_control_outputs(self) -> None:
+        base = build_demo_settings("fast_demo")
+        settings = replace(
+            base,
+            lut_grid_points=101,
+            frequency_rounds=3,
+            clock_tracking=ClockTrackingConfig(
+                rounds=5,
+                sync_interval_s=50e-3,
+                correction_gain=1.0,
+                random_walk_std_s_per_sqrt_s=0.0,
+            ),
+            phase_feedback=PhaseFeedbackConfig(
+                pilot_symbols=128,
+                snr_db=32.0,
+                feedback_delay_s=100e-6,
+                phase_quantization_bits=12,
+            ),
+            monte_carlo=MonteCarloConfig(
+                snr_db_values=(30.0,),
+                trials_per_snr=3,
+                seed=2023,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            summary = run_demo(settings, directory)
+
+        clock = summary["clock_tracking"]
+        frequency = summary["frequency_sync"]
+        states = summary["beamforming"]
+        self.assertEqual(
+            clock["applied_fractional_frequency_correction"],
+            clock["estimated_fractional_frequency_offset"],
+        )
+        self.assertEqual(
+            frequency["applied_oscillator_correction_hz"],
+            frequency["final_tracked_estimate_hz"],
+        )
+        self.assertLess(
+            abs(states["full_sync"]["arrival_difference_ps"]),
+            abs(states["unsynchronized"]["arrival_difference_ps"]),
+        )
+        self.assertLess(
+            states["full_sync"]["normalized_ideal_loss_db"],
+            states["time_frequency"]["normalized_ideal_loss_db"],
+        )
 
 
 class ResultWriterTests(unittest.TestCase):

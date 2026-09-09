@@ -2,42 +2,14 @@
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 
-from channel import add_awgn, apply_fractional_delay
-from config import MonteCarloConfig, WaveformConfig
+from clock_model import LocalClock
+from config import ChannelConfig, MonteCarloConfig, TwoWayConfig, WaveformConfig
 from crlb import crlb_for_waveform
-from delay_estimator import DelaySearchGate, estimate_delay, fft_matched_filter
-from lut_calibration import correct_qls_fraction, wrap_fractional_sample
-from models import DelayEstimate, MonteCarloResult, QLSCalibration
+from models import MonteCarloResult, QLSCalibration
+from two_way_sync import estimate_two_way, simulate_two_way_exchange
 from waveforms import generate_two_tone
-
-
-def _delay_estimates_s(
-    received: np.ndarray,
-    template: np.ndarray,
-    sample_rate_hz: float,
-    gate: DelaySearchGate,
-    calibration: QLSCalibration,
-) -> tuple[float, float, float]:
-    """返回整数峰值、原始 QLS 和 LUT 校正时延，单位为秒。"""
-
-    correlation = fft_matched_filter(received, template)
-    estimate: DelayEstimate = estimate_delay(correlation, sample_rate_hz, gate)
-    integer_s = estimate.integer_lag_samples / sample_rate_hz
-    raw_s = estimate.delay_s
-    if not estimate.qls_valid:
-        return float(integer_s), float(raw_s), float(raw_s)
-    corrected_fraction = float(
-        correct_qls_fraction(estimate.fractional_offset_samples, calibration)
-    )
-    adjustment_samples = float(
-        wrap_fractional_sample(corrected_fraction - estimate.fractional_offset_samples)
-    )
-    corrected_s = raw_s + adjustment_samples / sample_rate_hz
-    return float(integer_s), float(raw_s), float(corrected_s)
 
 
 def run_delay_monte_carlo(
@@ -47,9 +19,9 @@ def run_delay_monte_carlo(
 ) -> MonteCarloResult:
     """在 ``6:3:36 dB`` 等可配 SNR 轴上执行固定种子的完整统计。
 
-    每个 trial 对同一对称传播时延生成两次独立噪声观测。两次 LUT 时延误差
-    之差的一半构成双向钟差误差；该残差在载频处转为相位误差，用于统计
-    每 AP 功率固定时相对非相干功率和的两 AP 相干增益。
+    每个 trial 都调用正式的四时间戳交换和双向估计器。上下行使用同一真传播
+    时延和独立 AWGN，AP1 具有未知真钟差，处理时延通过时间戳公式抵消。估计
+    钟差残差在载频处转为相位误差，用于统计两 AP 相干增益。
     """
 
     waveform = generate_two_tone(waveform_config)
@@ -64,13 +36,6 @@ def run_delay_monte_carlo(
 
     rng = np.random.default_rng(config.seed)
     fractions = rng.uniform(-0.5, 0.5, size=config.trials_per_snr)
-    gate = DelaySearchGate(
-        center_s=config.nominal_delay_samples / waveform_config.sample_rate_hz,
-        half_width_s=config.gate_half_width_samples / waveform_config.sample_rate_hz,
-    )
-    trailing = config.nominal_delay_samples + 66
-    tx_buffer = np.pad(waveform.samples, (0, trailing)).astype(np.complex128)
-
     for snr_index, snr_db in enumerate(snr_axis):
         integer_errors = np.empty(config.trials_per_snr, dtype=np.float64)
         qls_errors = np.empty(config.trials_per_snr, dtype=np.float64)
@@ -80,37 +45,41 @@ def run_delay_monte_carlo(
         for trial_index, fraction in enumerate(fractions):
             delay_samples = config.nominal_delay_samples + float(fraction)
             true_delay_s = delay_samples / waveform_config.sample_rate_hz
-            clean = apply_fractional_delay(
-                tx_buffer,
-                true_delay_s,
-                waveform_config.sample_rate_hz,
+            link = ChannelConfig(
+                propagation_delay_s=true_delay_s,
+                amplitude=1.0,
+                phase_rad=0.0,
+                snr_db=float(snr_db),
             )
-            active_start = max(0, int(math.floor(delay_samples)))
-            active_stop = min(clean.size, int(math.ceil(delay_samples)) + waveform.samples.size)
-            active_mask = np.zeros(clean.shape, dtype=np.bool_)
-            active_mask[active_start:active_stop] = True
-
-            first = add_awgn(clean, float(snr_db), active_mask, rng)
-            second = add_awgn(clean, float(snr_db), active_mask, rng)
-            integer_s, raw_s, corrected_s = _delay_estimates_s(
-                first.samples,
-                waveform.samples,
-                waveform_config.sample_rate_hz,
-                gate,
-                calibration,
+            two_way = TwoWayConfig(
+                tx1_local_time_s=1e-3,
+                processing_delay_s=config.processing_delay_s,
+                coarse_up_delay_s=config.nominal_delay_samples
+                / waveform_config.sample_rate_hz,
+                coarse_down_delay_s=config.nominal_delay_samples
+                / waveform_config.sample_rate_hz,
+                gate_half_width_samples=config.gate_half_width_samples,
             )
-            _, _, corrected_second_s = _delay_estimates_s(
-                second.samples,
-                waveform.samples,
-                waveform_config.sample_rate_hz,
-                gate,
-                calibration,
+            observation = simulate_two_way_exchange(
+                waveform_config=waveform_config,
+                two_way_config=two_way,
+                ap0_clock=LocalClock(),
+                ap1_clock=LocalClock(offset_s=config.clock_offset_truth_s),
+                up_link=link,
+                down_link=link,
+                calibration=calibration,
+                rng=rng,
             )
+            clock_estimate = estimate_two_way(observation)
+            raw_up = observation.up_measurement.raw_estimate
+            integer_s = raw_up.integer_lag_samples / waveform_config.sample_rate_hz
+            raw_s = raw_up.delay_s
+            corrected_s = observation.up_measurement.corrected_delay_s
             integer_errors[trial_index] = integer_s - true_delay_s
             qls_errors[trial_index] = raw_s - true_delay_s
             lut_errors[trial_index] = corrected_s - true_delay_s
-            clock_errors[trial_index] = 0.5 * (
-                (corrected_s - true_delay_s) - (corrected_second_s - true_delay_s)
+            clock_errors[trial_index] = (
+                clock_estimate.ap1_offset_estimate_s - config.clock_offset_truth_s
             )
 
         integer_rmse[snr_index] = float(np.sqrt(np.mean(integer_errors**2)))

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "expected_figure_pairs": 10,
+  "max_clock_residual_ps": 20.0,
+  "max_frequency_residual_fraction": 0.02,
+  "min_full_sync_gain_vs_incoherent_db": 2.9,
+  "max_full_sync_ideal_loss_db": 0.05
+}

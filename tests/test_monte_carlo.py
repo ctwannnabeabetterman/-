@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 from config import MonteCarloConfig, WaveformConfig
 from lut_calibration import build_qls_lut
 from monte_carlo import run_delay_monte_carlo
+from two_way_sync import simulate_two_way_exchange as real_simulate_two_way_exchange
 
 
 class MonteCarloTests(unittest.TestCase):
@@ -59,6 +61,46 @@ class MonteCarloTests(unittest.TestCase):
 
         self.assertLess(result.lut_rmse_s[-1], result.integer_peak_rmse_s[-1])
         self.assertLess(result.crlb_std_s[-1], result.crlb_std_s[0])
+
+    def test_clock_statistic_executes_one_four_timestamp_exchange_per_trial(self) -> None:
+        config = MonteCarloConfig(
+            snr_db_values=(30.0,),
+            trials_per_snr=3,
+            seed=94,
+            clock_offset_truth_s=80e-9,
+            processing_delay_s=17e-6,
+        )
+        with patch(
+            "monte_carlo.simulate_two_way_exchange",
+            wraps=real_simulate_two_way_exchange,
+        ) as exchange:
+            run_delay_monte_carlo(
+                self.waveform_config,
+                self.calibration,
+                config,
+            )
+
+        self.assertEqual(exchange.call_count, config.trials_per_snr)
+
+    def test_processing_delay_does_not_change_fixed_seed_clock_rmse(self) -> None:
+        base = dict(snr_db_values=(30.0,), trials_per_snr=10, seed=95)
+        short = run_delay_monte_carlo(
+            self.waveform_config,
+            self.calibration,
+            MonteCarloConfig(**base, processing_delay_s=5e-6),
+        )
+        long = run_delay_monte_carlo(
+            self.waveform_config,
+            self.calibration,
+            MonteCarloConfig(**base, processing_delay_s=100e-6),
+        )
+
+        np.testing.assert_allclose(
+            short.clock_offset_rmse_s,
+            long.clock_offset_rmse_s,
+            rtol=0.0,
+            atol=1e-16,
+        )
 
 
 if __name__ == "__main__":

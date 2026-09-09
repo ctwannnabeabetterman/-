@@ -9,7 +9,7 @@ from numpy.typing import ArrayLike, NDArray
 
 from channel import apply_fractional_delay
 from config import BeamformingConfig, WaveformConfig
-from models import BeamformingMetrics, BeamformingResult
+from models import BeamformingMetrics, BeamformingPlantState, BeamformingResult
 from phase_sync import complex_los_channel, compute_phase_weights
 
 
@@ -134,17 +134,23 @@ def simulate_four_sync_states(
     baseband_samples: ArrayLike,
     waveform_config: WaveformConfig,
     config: BeamformingConfig,
+    plant_state: BeamformingPlantState,
     *,
-    estimated_time_correction_s: float,
-    estimated_frequency_offset_hz: float,
     channel_estimates: ArrayLike,
 ) -> dict[str, BeamformingResult]:
-    """仿真未同步、仅时间、时间频率和完整同步四种状态。"""
+    """从显式 plant 快照比较四种状态，不在此处接收控制器估计量。"""
 
-    if not math.isfinite(estimated_time_correction_s):
-        raise ValueError("estimated_time_correction_s 必须为有限数")
-    if not math.isfinite(estimated_frequency_offset_hz):
-        raise ValueError("estimated_frequency_offset_hz 必须为有限数")
+    plant_values = (
+        plant_state.data_epoch_s,
+        plant_state.raw_clock_offset_s,
+        plant_state.residual_clock_offset_s,
+        plant_state.raw_frequency_offset_hz,
+        plant_state.residual_frequency_offset_hz,
+        plant_state.raw_ap1_phase_rad,
+        plant_state.residual_ap1_phase_rad,
+    )
+    if not all(math.isfinite(value) for value in plant_values):
+        raise ValueError("plant_state 必须只包含有限数")
     estimates = _complex_pair(channel_estimates, "channel_estimates")
 
     h0 = complex_los_channel(
@@ -153,70 +159,75 @@ def simulate_four_sync_states(
         waveform_config.carrier_frequency_hz,
         config.ap0_channel_phase_rad,
     )
-    h1 = complex_los_channel(
+    h1_static = complex_los_channel(
         config.ap1_amplitude,
         config.ap1_propagation_delay_s,
         waveform_config.carrier_frequency_hz,
         config.ap1_channel_phase_rad,
-    ) * np.exp(1j * config.ap1_initial_phase_rad)
-    channels = np.array([h0, h1], dtype=np.complex128)
+    )
+    raw_channels = np.array(
+        [h0, h1_static * np.exp(1j * plant_state.raw_ap1_phase_rad)],
+        dtype=np.complex128,
+    )
+    corrected_channels = np.array(
+        [h0, h1_static * np.exp(1j * plant_state.residual_ap1_phase_rad)],
+        dtype=np.complex128,
+    )
 
     amplitude_scale = 1.0 if config.normalization == "per_ap_fixed" else 1.0 / np.sqrt(2.0)
     uncorrected_weights = np.full(2, amplitude_scale, dtype=np.complex128)
     phase_weights = compute_phase_weights(estimates, config.normalization)
 
-    residual_clock_s = config.ap1_clock_offset_s + estimated_time_correction_s
     unsynchronized_delays = np.array(
         [
             config.ap0_propagation_delay_s,
-            config.ap1_propagation_delay_s - config.ap1_clock_offset_s,
+            config.ap1_propagation_delay_s - plant_state.raw_clock_offset_s,
         ],
         dtype=np.float64,
     )
     time_corrected_delays = np.array(
         [
             config.ap0_propagation_delay_s,
-            config.ap1_propagation_delay_s - residual_clock_s,
+            config.ap1_propagation_delay_s - plant_state.residual_clock_offset_s,
         ],
         dtype=np.float64,
     )
-    residual_cfo_hz = config.ap1_cfo_hz - estimated_frequency_offset_hz
 
     states: dict[str, BeamformingResult] = {}
     states["unsynchronized"] = combine_two_ap(
         baseband_samples,
         waveform_config.sample_rate_hz,
         unsynchronized_delays,
-        channels,
+        raw_channels,
         uncorrected_weights,
-        config.ap1_cfo_hz,
+        plant_state.raw_frequency_offset_hz,
         "unsynchronized",
     )
     states["time_only"] = combine_two_ap(
         baseband_samples,
         waveform_config.sample_rate_hz,
         time_corrected_delays,
-        channels,
+        raw_channels,
         uncorrected_weights,
-        config.ap1_cfo_hz,
+        plant_state.raw_frequency_offset_hz,
         "time_only",
     )
     states["time_frequency"] = combine_two_ap(
         baseband_samples,
         waveform_config.sample_rate_hz,
         time_corrected_delays,
-        channels,
+        corrected_channels,
         uncorrected_weights,
-        residual_cfo_hz,
+        plant_state.residual_frequency_offset_hz,
         "time_frequency",
     )
     states["full_sync"] = combine_two_ap(
         baseband_samples,
         waveform_config.sample_rate_hz,
         time_corrected_delays,
-        channels,
+        corrected_channels,
         phase_weights,
-        residual_cfo_hz,
+        plant_state.residual_frequency_offset_hz,
         "full_sync",
     )
     return states

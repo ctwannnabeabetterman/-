@@ -1,4 +1,4 @@
-"""集中管理阶段 1 的波形和静态信道参数。"""
+"""集中管理波形、plant 真值、算法运行和统计参数。"""
 
 from __future__ import annotations
 
@@ -118,6 +118,23 @@ class ClockTrackingConfig:
 
 
 @dataclass(frozen=True)
+class ClockPlantConfig:
+    """AP1 未控制仿真时钟的真偏差和真频差。"""
+
+    initial_offset_s: float = 100e-9
+    fractional_frequency_offset: float = 0.2e-6
+
+    def __post_init__(self) -> None:
+        if not all(
+            math.isfinite(value)
+            for value in (self.initial_offset_s, self.fractional_frequency_offset)
+        ):
+            raise ValueError("时钟 plant 配置必须为有限数")
+        if 1.0 + self.fractional_frequency_offset <= 0.0:
+            raise ValueError("未控制时钟速率必须大于 0")
+
+
+@dataclass(frozen=True)
 class FrequencySyncConfig:
     """软件等效频率参考、分段相位估计和跟踪参数。"""
 
@@ -177,9 +194,6 @@ class BeamformingConfig:
     ap1_amplitude: float = 1.0
     ap0_channel_phase_rad: float = 0.2
     ap1_channel_phase_rad: float = -0.6
-    ap1_clock_offset_s: float = 12.25e-9
-    ap1_cfo_hz: float = 600.0
-    ap1_initial_phase_rad: float = 1.1
     normalization: str = "per_ap_fixed"
 
     def __post_init__(self) -> None:
@@ -190,9 +204,6 @@ class BeamformingConfig:
             self.ap1_amplitude,
             self.ap0_channel_phase_rad,
             self.ap1_channel_phase_rad,
-            self.ap1_clock_offset_s,
-            self.ap1_cfo_hz,
-            self.ap1_initial_phase_rad,
         )
         if not all(math.isfinite(value) for value in values):
             raise ValueError("波束赋形配置必须为有限数")
@@ -205,6 +216,43 @@ class BeamformingConfig:
 
 
 @dataclass(frozen=True)
+class OscillatorConfig:
+    """AP1 本振的仿真真频偏和初始相位。"""
+
+    frequency_offset_hz: float = 600.0
+    initial_phase_rad: float = 1.1
+
+    def __post_init__(self) -> None:
+        if not all(
+            math.isfinite(value)
+            for value in (self.frequency_offset_hz, self.initial_phase_rad)
+        ):
+            raise ValueError("本振配置必须为有限数")
+
+
+@dataclass(frozen=True)
+class PhaseFeedbackConfig:
+    """RX 导频、反馈延迟和相位量化配置。"""
+
+    pilot_symbols: int = 1024
+    snr_db: float = 32.0
+    feedback_delay_s: float = 100e-6
+    phase_quantization_bits: int | None = 12
+    channel_phase_rate_rad_per_s: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.pilot_symbols < 16:
+            raise ValueError("pilot_symbols 至少为 16")
+        values = (self.snr_db, self.feedback_delay_s, self.channel_phase_rate_rad_per_s)
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("相位反馈配置必须为有限数")
+        if self.feedback_delay_s < 0.0:
+            raise ValueError("feedback_delay_s 必须为非负数")
+        if self.phase_quantization_bits is not None and self.phase_quantization_bits < 2:
+            raise ValueError("phase_quantization_bits 必须至少为 2 或 None")
+
+
+@dataclass(frozen=True)
 class MonteCarloConfig:
     """SNR 扫描、随机种子和统计次数配置。"""
 
@@ -214,6 +262,8 @@ class MonteCarloConfig:
     nominal_delay_samples: int = 24
     gate_half_width_samples: float = 2.5
     noise_bandwidth_hz: float | None = None
+    clock_offset_truth_s: float = 100e-9
+    processing_delay_s: float = 20e-6
 
     def __post_init__(self) -> None:
         if len(self.snr_db_values) == 0:
@@ -230,3 +280,7 @@ class MonteCarloConfig:
             not math.isfinite(self.noise_bandwidth_hz) or self.noise_bandwidth_hz <= 0.0
         ):
             raise ValueError("noise_bandwidth_hz 必须为正有限数或 None")
+        if not math.isfinite(self.clock_offset_truth_s):
+            raise ValueError("clock_offset_truth_s 必须为有限数")
+        if not math.isfinite(self.processing_delay_s) or self.processing_delay_s < 0.0:
+            raise ValueError("processing_delay_s 必须为非负有限数")

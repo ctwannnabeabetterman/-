@@ -60,11 +60,44 @@ class LocalClock:
             raise ValueError("correction_s 必须为有限数")
         self.time_correction_s += correction_s
 
-    def apply_frequency_correction(self, correction_fraction: float) -> None:
-        """记录由频率估计器给出的归一化频率校正量。"""
+    def _apply_frequency_correction(
+        self,
+        correction_fraction: float,
+        effective_true_time_s: float | None,
+    ) -> None:
+        """更新速率；给出生效真时刻时保持该时刻的本地时间连续。"""
 
         if not math.isfinite(correction_fraction):
             raise ValueError("correction_fraction 必须为有限数")
         if 1.0 + self.fractional_frequency_offset - correction_fraction <= 0.0:
             raise ValueError("频率校正会产生非正时钟速率")
+        if effective_true_time_s is not None:
+            if not math.isfinite(effective_true_time_s):
+                raise ValueError("effective_true_time_s 必须为有限数或 None")
+            old_reading = self.read_time(effective_true_time_s)
+            self.fractional_frequency_correction = correction_fraction
+            self.time_correction_s += old_reading - self.read_time(effective_true_time_s)
+            return
         self.fractional_frequency_correction = correction_fraction
+
+    def apply_frequency_correction(
+        self,
+        correction_fraction: float,
+        *,
+        effective_true_time_s: float | None = None,
+    ) -> None:
+        """应用无量纲时钟速率校正，并可在生效时保持时间连续。"""
+
+        self._apply_frequency_correction(correction_fraction, effective_true_time_s)
+
+    def raw_offset_at(self, true_time_s: float) -> float:
+        """返回未应用算法控制时 AP1 相对理想时钟的仿真真偏差。"""
+
+        if not math.isfinite(true_time_s):
+            raise ValueError("true_time_s 必须为有限数")
+        return float(self.offset_s + self.fractional_frequency_offset * true_time_s)
+
+    def residual_offset_at(self, true_time_s: float) -> float:
+        """返回全部已应用控制生效后的物理时间残差。"""
+
+        return float(self.read_time(true_time_s) - true_time_s)

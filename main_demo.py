@@ -4,34 +4,49 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, replace
+from importlib.metadata import version
 from pathlib import Path
+import platform
 from typing import Sequence
 
 import numpy as np
 
 from beamforming import simulate_four_sync_states
-from channel import add_awgn, propagate_static_link
+from channel import propagate_static_link
 from clock_model import LocalClock
 from config import (
     BeamformingConfig,
     ChannelConfig,
+    ClockPlantConfig,
     ClockTrackingConfig,
     FrequencySyncConfig,
     MonteCarloConfig,
+    OscillatorConfig,
+    PhaseFeedbackConfig,
     TwoWayConfig,
     WaveformConfig,
 )
 from delay_estimator import DelaySearchGate, estimate_delay, fft_matched_filter
-from experiments import run_clock_tracking
+from experiments import (
+    estimate_clock_frequency_offset,
+    reconstruct_raw_offset_estimate,
+    run_clock_tracking,
+)
 from frequency_sync import (
     estimate_frequency_offset,
     simulate_frequency_reference,
     update_frequency_tracker,
 )
 from lut_calibration import correct_qls_fraction, load_or_build_lut, wrap_fractional_sample
-from models import BeamformingResult, ClockTrackingResult, MonteCarloResult
+from models import (
+    BeamformingPlantState,
+    BeamformingResult,
+    ClockTrackingResult,
+    MonteCarloResult,
+)
 from monte_carlo import run_delay_monte_carlo
-from phase_sync import complex_los_channel, estimate_channel_ls
+from oscillator_model import LocalOscillator
+from phase_sync import simulate_channel_feedback
 from plotting import (
     plot_clock_tracking,
     plot_coherent_gain,
@@ -56,13 +71,15 @@ class DemoSettings:
     seed: int
     waveform: WaveformConfig
     two_way: TwoWayConfig
+    clock_plant: ClockPlantConfig
     clock_tracking: ClockTrackingConfig
     frequency: FrequencySyncConfig
+    oscillator: OscillatorConfig
     beamforming: BeamformingConfig
+    phase_feedback: PhaseFeedbackConfig
     monte_carlo: MonteCarloConfig
     lut_grid_points: int
     frequency_rounds: int
-    pilot_snr_db: float
 
 
 def build_demo_settings(mode: str) -> DemoSettings:
@@ -76,7 +93,7 @@ def build_demo_settings(mode: str) -> DemoSettings:
         observation_duration_s=2e-3 if formal else 200e-6,
         segment_duration_s=50e-6 if formal else 20e-6,
         cfo_hz=600.0,
-        sample_clock_offset_fraction=0.05e-6,
+        sample_clock_offset_fraction=0.0,
         initial_phase_rad=0.7,
         snr_db=28.0,
         tracker_alpha=0.55,
@@ -91,6 +108,10 @@ def build_demo_settings(mode: str) -> DemoSettings:
         seed=2023,
         waveform=waveform,
         two_way=TwoWayConfig(),
+        clock_plant=ClockPlantConfig(
+            initial_offset_s=100e-9,
+            fractional_frequency_offset=0.2e-6,
+        ),
         clock_tracking=ClockTrackingConfig(
             rounds=20,
             sync_interval_s=50e-3,
@@ -98,6 +119,10 @@ def build_demo_settings(mode: str) -> DemoSettings:
             random_walk_std_s_per_sqrt_s=0.5e-12,
         ),
         frequency=frequency,
+        oscillator=OscillatorConfig(
+            frequency_offset_hz=600.0,
+            initial_phase_rad=1.1,
+        ),
         beamforming=BeamformingConfig(
             ap0_propagation_delay_s=50e-9,
             ap1_propagation_delay_s=50e-9,
@@ -105,15 +130,18 @@ def build_demo_settings(mode: str) -> DemoSettings:
             ap1_amplitude=0.9,
             ap0_channel_phase_rad=0.2,
             ap1_channel_phase_rad=-0.6,
-            ap1_clock_offset_s=100e-9,
-            ap1_cfo_hz=600.0,
-            ap1_initial_phase_rad=1.1,
             normalization="per_ap_fixed",
+        ),
+        phase_feedback=PhaseFeedbackConfig(
+            pilot_symbols=1024,
+            snr_db=32.0,
+            feedback_delay_s=100e-6,
+            phase_quantization_bits=12,
+            channel_phase_rate_rad_per_s=0.0,
         ),
         monte_carlo=monte_carlo,
         lut_grid_points=2001 if formal else 401,
         frequency_rounds=20 if formal else 12,
-        pilot_snr_db=32.0,
     )
 
 
@@ -135,22 +163,24 @@ def _correct_delay_s(raw_estimate, calibration, sample_rate_hz: float) -> float:
 
 def _run_frequency_rounds(
     settings: DemoSettings,
+    oscillator: LocalOscillator,
+    sample_clock_offset_fraction: float,
+    start_epoch_s: float,
     rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """生成缓慢变化频偏并仅用观测估计值更新指数跟踪器。"""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """由连续本振 plant 生成参考观测，并只用观测更新跟踪器。"""
 
     true_values = np.empty(settings.frequency_rounds, dtype=np.float64)
     estimates = np.empty(settings.frequency_rounds, dtype=np.float64)
     tracked = np.empty(settings.frequency_rounds, dtype=np.float64)
     tracker_state = 0.0
     for index in range(settings.frequency_rounds):
-        cfo_hz = settings.frequency.cfo_hz + 15.0 * np.sin(
-            2.0 * np.pi * index / max(settings.frequency_rounds - 1, 1)
-        )
+        round_epoch_s = start_epoch_s + index * settings.frequency.observation_duration_s
         round_config = replace(
             settings.frequency,
-            cfo_hz=float(cfo_hz),
-            initial_phase_rad=settings.frequency.initial_phase_rad + 0.17 * index,
+            cfo_hz=oscillator.frequency_offset_hz,
+            sample_clock_offset_fraction=sample_clock_offset_fraction,
+            initial_phase_rad=oscillator.raw_phase_at(round_epoch_s),
         )
         observation = simulate_frequency_reference(round_config, rng)
         estimate = estimate_frequency_offset(observation.samples, round_config)
@@ -162,43 +192,8 @@ def _run_frequency_rounds(
         true_values[index] = observation.true_observed_offset_hz
         estimates[index] = estimate.frequency_offset_hz
         tracked[index] = tracker_state
-    return true_values, estimates, tracked
-
-
-def _estimate_feedback_channels(
-    config: BeamformingConfig,
-    waveform_config: WaveformConfig,
-    pilot_snr_db: float,
-    rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray]:
-    """在 RX 生成分时 QPSK 导频并反馈两个复信道 LS 估计。"""
-
-    h0 = complex_los_channel(
-        config.ap0_amplitude,
-        config.ap0_propagation_delay_s,
-        waveform_config.carrier_frequency_hz,
-        config.ap0_channel_phase_rad,
-    )
-    h1 = complex_los_channel(
-        config.ap1_amplitude,
-        config.ap1_propagation_delay_s,
-        waveform_config.carrier_frequency_hz,
-        config.ap1_channel_phase_rad,
-    ) * np.exp(1j * config.ap1_initial_phase_rad)
-    truth = np.array([h0, h1], dtype=np.complex128)
-    qpsk_index = rng.integers(0, 4, size=1024)
-    pilot = np.exp(1j * np.pi / 2.0 * qpsk_index).astype(np.complex128)
-    estimates = np.empty(2, dtype=np.complex128)
-    for index, channel in enumerate(truth):
-        clean = channel * pilot
-        received = add_awgn(
-            clean,
-            pilot_snr_db,
-            np.ones(pilot.shape, dtype=np.bool_),
-            rng,
-        )
-        estimates[index] = estimate_channel_ls(pilot, received.samples)
-    return truth, estimates
+    end_epoch_s = start_epoch_s + settings.frequency_rounds * settings.frequency.observation_duration_s
+    return true_values, estimates, tracked, float(end_epoch_s)
 
 
 def _save_numeric_tables(
@@ -238,9 +233,7 @@ def _save_numeric_tables(
                 "epoch_ms": clock_result.epoch_true_s * 1e3,
                 "true_raw_offset_ps": clock_result.raw_offset_s * 1e12,
                 "estimated_residual_before_ps": clock_result.estimated_offset_s * 1e12,
-                "estimated_raw_offset_ps": -np.cumsum(
-                    clock_result.applied_correction_s
-                )
+                "estimated_raw_offset_ps": reconstruct_raw_offset_estimate(clock_result)
                 * 1e12,
                 "applied_correction_ps": clock_result.applied_correction_s * 1e12,
                 "residual_before_ps": clock_result.residual_before_s * 1e12,
@@ -350,8 +343,8 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
 
     ap0_clock = LocalClock()
     ap1_clock = LocalClock(
-        offset_s=settings.beamforming.ap1_clock_offset_s,
-        fractional_frequency_offset=0.2e-6,
+        offset_s=settings.clock_plant.initial_offset_s,
+        fractional_frequency_offset=settings.clock_plant.fractional_frequency_offset,
     )
     synchronization_link = ChannelConfig(
         propagation_delay_s=50e-9,
@@ -371,27 +364,60 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         rng,
     )
 
-    frequency_true, frequency_estimate, frequency_tracked = _run_frequency_rounds(
-        settings, rng
+    clock_frequency_estimate = estimate_clock_frequency_offset(clock_result)
+    clock_control_epoch_s = float(clock_result.epoch_true_s[-1])
+    ap1_clock.apply_frequency_correction(
+        clock_frequency_estimate,
+        effective_true_time_s=clock_control_epoch_s,
     )
-    current_beamforming = replace(
-        settings.beamforming,
-        ap1_clock_offset_s=float(clock_result.raw_offset_s[-1]),
-        ap1_cfo_hz=float(frequency_true[-1]),
+
+    oscillator = LocalOscillator(
+        frequency_offset_hz=settings.oscillator.frequency_offset_hz,
+        initial_phase_rad=settings.oscillator.initial_phase_rad,
     )
-    channel_truth, channel_estimates = _estimate_feedback_channels(
-        current_beamforming,
+    frequency_start_epoch_s = (
+        clock_control_epoch_s + settings.clock_tracking.sync_interval_s
+    )
+    frequency_true, frequency_estimate, frequency_tracked, frequency_end_epoch_s = (
+        _run_frequency_rounds(
+            settings,
+            oscillator,
+            ap1_clock.effective_rate - 1.0,
+            frequency_start_epoch_s,
+            rng,
+        )
+    )
+    oscillator.apply_frequency_correction(
+        float(frequency_tracked[-1]),
+        effective_time_s=frequency_end_epoch_s,
+    )
+    pilot_epoch_s = frequency_end_epoch_s + 1e-3
+    residual_clock_at_pilot_s = ap1_clock.residual_offset_at(pilot_epoch_s)
+    channel_feedback = simulate_channel_feedback(
         settings.waveform,
-        settings.pilot_snr_db,
-        rng,
+        settings.beamforming,
+        settings.phase_feedback,
+        oscillator,
+        residual_clock_offset_s=residual_clock_at_pilot_s,
+        pilot_epoch_s=pilot_epoch_s,
+        rng=rng,
+    )
+    data_epoch_s = channel_feedback.data_epoch_s
+    plant_state = BeamformingPlantState(
+        data_epoch_s=data_epoch_s,
+        raw_clock_offset_s=ap1_clock.raw_offset_at(data_epoch_s),
+        residual_clock_offset_s=ap1_clock.residual_offset_at(data_epoch_s),
+        raw_frequency_offset_hz=oscillator.frequency_offset_hz,
+        residual_frequency_offset_hz=oscillator.residual_frequency_offset_hz,
+        raw_ap1_phase_rad=oscillator.raw_phase_at(data_epoch_s),
+        residual_ap1_phase_rad=oscillator.phase_at(data_epoch_s),
     )
     beamforming_states = simulate_four_sync_states(
         waveform.samples,
         settings.waveform,
-        current_beamforming,
-        estimated_time_correction_s=ap1_clock.time_correction_s,
-        estimated_frequency_offset_hz=float(frequency_tracked[-1]),
-        channel_estimates=channel_estimates,
+        settings.beamforming,
+        plant_state,
+        channel_estimates=channel_feedback.feedback_channel_estimates,
     )
 
     monte_carlo = run_delay_monte_carlo(
@@ -424,6 +450,37 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
     summary: dict[str, object] = {
         "mode": settings.mode,
         "seed": settings.seed,
+        "runtime": {
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+            "numpy": version("numpy"),
+            "scipy": version("scipy"),
+            "matplotlib": version("matplotlib"),
+        },
+        "state_separation": {
+            "plant_truth_policy": "truth is used only to generate observations, unsynchronized baselines, and post-run metrics",
+            "control_sources": {
+                "time_offset": "two-way timestamp estimate",
+                "sample_clock_rate": "slope of reconstructed two-way offset estimates",
+                "oscillator_frequency": "tracked reference phase-slope estimate",
+                "transmit_phase": "quantized RX pilot LS feedback",
+            },
+            "plant_at_data_epoch": {
+                "data_epoch_s": plant_state.data_epoch_s,
+                "raw_clock_offset_ps": plant_state.raw_clock_offset_s * 1e12,
+                "residual_clock_offset_ps": plant_state.residual_clock_offset_s * 1e12,
+                "raw_frequency_offset_hz": plant_state.raw_frequency_offset_hz,
+                "residual_frequency_offset_hz": plant_state.residual_frequency_offset_hz,
+                "raw_ap1_phase_deg": float(
+                    np.rad2deg(np.angle(np.exp(1j * plant_state.raw_ap1_phase_rad)))
+                ),
+                "residual_ap1_phase_deg": float(
+                    np.rad2deg(
+                        np.angle(np.exp(1j * plant_state.residual_ap1_phase_rad))
+                    )
+                ),
+            },
+        },
         "waveform": {
             "sample_rate_msa_s": settings.waveform.sample_rate_hz / 1e6,
             "tone_separation_mhz": settings.waveform.tone_separation_hz / 1e6,
@@ -463,23 +520,38 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
             "initial_raw_offset_ps": float(clock_result.raw_offset_s[0] * 1e12),
             "final_raw_offset_ps": float(clock_result.raw_offset_s[-1] * 1e12),
             "final_estimated_raw_offset_ps": float(
-                -np.sum(clock_result.applied_correction_s) * 1e12
+                reconstruct_raw_offset_estimate(clock_result)[-1] * 1e12
             ),
             "final_residual_after_update_ps": float(
                 clock_result.residual_after_s[-1] * 1e12
             ),
+            "estimated_fractional_frequency_offset": clock_frequency_estimate,
+            "applied_fractional_frequency_correction": ap1_clock.fractional_frequency_correction,
+            "residual_fractional_frequency_offset": ap1_clock.effective_rate - 1.0,
         },
         "frequency_sync": {
             "final_true_observed_offset_hz": float(frequency_true[-1]),
             "final_single_estimate_hz": float(frequency_estimate[-1]),
             "final_tracked_estimate_hz": float(frequency_tracked[-1]),
-            "final_residual_hz": float(frequency_true[-1] - frequency_tracked[-1]),
+            "applied_oscillator_correction_hz": oscillator.frequency_correction_hz,
+            "final_residual_hz": oscillator.residual_frequency_offset_hz,
         },
         "channel_feedback": {
-            "true_phase_rad": np.angle(channel_truth),
-            "estimated_phase_rad": np.angle(channel_estimates),
-            "phase_error_deg": np.rad2deg(
-                np.angle(channel_estimates * np.conj(channel_truth))
+            "pilot_epoch_s": channel_feedback.pilot_epoch_s,
+            "data_epoch_s": channel_feedback.data_epoch_s,
+            "feedback_delay_us": settings.phase_feedback.feedback_delay_s * 1e6,
+            "phase_quantization_bits": settings.phase_feedback.phase_quantization_bits,
+            "true_data_phase_rad": np.angle(
+                channel_feedback.true_effective_channels_at_data
+            ),
+            "raw_pilot_estimated_phase_rad": np.angle(
+                channel_feedback.raw_channel_estimates
+            ),
+            "feedback_phase_rad": np.angle(
+                channel_feedback.feedback_channel_estimates
+            ),
+            "phase_error_at_data_deg": np.rad2deg(
+                channel_feedback.phase_error_at_data_rad
             ),
         },
         "beamforming": beamforming_summary,

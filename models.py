@@ -1,4 +1,4 @@
-"""阶段 1 的只读数据结构。"""
+"""同步、控制、波束赋形和统计流程的只读数据结构。"""
 
 from __future__ import annotations
 
@@ -191,6 +191,34 @@ class BeamformingResult:
     residual_frequency_offset_hz: float
     residual_phase_difference_rad: float
     metrics: BeamformingMetrics
+
+
+@dataclass(frozen=True)
+class BeamformingPlantState:
+    """同一数据历元下的未控制和已控制物理状态快照。
+
+    该结构只属于仿真 plant；估计器和控制器不接收此结构。
+    """
+
+    data_epoch_s: float
+    raw_clock_offset_s: float
+    residual_clock_offset_s: float
+    raw_frequency_offset_hz: float
+    residual_frequency_offset_hz: float
+    raw_ap1_phase_rad: float
+    residual_ap1_phase_rad: float
+
+
+@dataclass(frozen=True)
+class ChannelFeedbackResult:
+    """导频观测经过延迟、量化反馈后在数据历元可用的复信道估计。"""
+
+    pilot_epoch_s: float
+    data_epoch_s: float
+    raw_channel_estimates: ComplexArray
+    feedback_channel_estimates: ComplexArray
+    true_effective_channels_at_data: ComplexArray
+    phase_error_at_data_rad: FloatArray
 
 
 @dataclass(frozen=True)

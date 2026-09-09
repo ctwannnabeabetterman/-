@@ -7,6 +7,11 @@ import math
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from channel import add_awgn, apply_fractional_delay
+from config import BeamformingConfig, PhaseFeedbackConfig, WaveformConfig
+from models import ChannelFeedbackResult
+from oscillator_model import LocalOscillator
+
 
 def complex_los_channel(
     amplitude: float,
@@ -66,3 +71,114 @@ def compute_phase_weights(
     if normalization == "total_fixed":
         return np.asarray(weights / np.sqrt(channels.size), dtype=np.complex128)
     raise ValueError("normalization 必须为 per_ap_fixed 或 total_fixed")
+
+
+def _quantize_channel_phase(
+    channel_estimates: NDArray[np.complex128],
+    phase_bits: int | None,
+) -> NDArray[np.complex128]:
+    """按可选均匀相位码本量化反馈，保留 LS 幅度。"""
+
+    if phase_bits is None:
+        return channel_estimates.copy()
+    phase_step = 2.0 * np.pi / (2**phase_bits)
+    quantized_phase = np.round(np.angle(channel_estimates) / phase_step) * phase_step
+    return np.asarray(
+        np.abs(channel_estimates) * np.exp(1j * quantized_phase),
+        dtype=np.complex128,
+    )
+
+
+def simulate_channel_feedback(
+    waveform_config: WaveformConfig,
+    beamforming_config: BeamformingConfig,
+    feedback_config: PhaseFeedbackConfig,
+    oscillator: LocalOscillator,
+    *,
+    residual_clock_offset_s: float,
+    pilot_epoch_s: float,
+    rng: np.random.Generator,
+) -> ChannelFeedbackResult:
+    """通过与数据共享的时钟和本振轨迹生成 RX 导频反馈。
+
+    ``pilot_epoch_s`` 是导频块中心真时刻。AP1 导频包含当前残余时间偏差、
+    残余本振相位斜率和可配信道相位漂移。数据历元位于反馈延迟之后，因而
+    估计会自然包含反馈陈旧误差，而非直接从数据历元真信道构造权重。
+    """
+
+    if not math.isfinite(residual_clock_offset_s) or not math.isfinite(pilot_epoch_s):
+        raise ValueError("残余钟差和导频历元必须为有限数")
+    count = feedback_config.pilot_symbols
+    centered_time_s = (
+        np.arange(count, dtype=np.float64) - 0.5 * (count - 1)
+    ) / waveform_config.sample_rate_hz
+    absolute_time_s = pilot_epoch_s + centered_time_s
+    data_epoch_s = pilot_epoch_s + feedback_config.feedback_delay_s
+    pilot = np.exp(
+        1j * np.pi / 2.0 * rng.integers(0, 4, size=count)
+    ).astype(np.complex128)
+
+    h0_static = complex_los_channel(
+        beamforming_config.ap0_amplitude,
+        beamforming_config.ap0_propagation_delay_s,
+        waveform_config.carrier_frequency_hz,
+        beamforming_config.ap0_channel_phase_rad,
+    )
+    h1_static = complex_los_channel(
+        beamforming_config.ap1_amplitude,
+        beamforming_config.ap1_propagation_delay_s,
+        waveform_config.carrier_frequency_hz,
+        beamforming_config.ap1_channel_phase_rad,
+    )
+    delayed_ap1_pilot = apply_fractional_delay(
+        pilot,
+        -residual_clock_offset_s,
+        waveform_config.sample_rate_hz,
+    )
+    ap1_phase_rad = np.array(
+        [oscillator.phase_at(float(time_s)) for time_s in absolute_time_s],
+        dtype=np.float64,
+    ) + feedback_config.channel_phase_rate_rad_per_s * absolute_time_s
+    clean0 = np.asarray(h0_static * pilot, dtype=np.complex128)
+    clean1 = np.asarray(
+        h1_static * np.exp(1j * ap1_phase_rad) * delayed_ap1_pilot,
+        dtype=np.complex128,
+    )
+    active_mask = np.ones(pilot.shape, dtype=np.bool_)
+    received0 = add_awgn(clean0, feedback_config.snr_db, active_mask, rng)
+    received1 = add_awgn(clean1, feedback_config.snr_db, active_mask, rng)
+    raw_estimates = np.array(
+        [
+            estimate_channel_ls(pilot, received0.samples),
+            estimate_channel_ls(pilot, received1.samples),
+        ],
+        dtype=np.complex128,
+    )
+    feedback_estimates = _quantize_channel_phase(
+        raw_estimates, feedback_config.phase_quantization_bits
+    )
+    true_data_channels = np.array(
+        [
+            h0_static,
+            h1_static
+            * np.exp(
+                1j
+                * (
+                    oscillator.phase_at(data_epoch_s)
+                    + feedback_config.channel_phase_rate_rad_per_s * data_epoch_s
+                )
+            ),
+        ],
+        dtype=np.complex128,
+    )
+    phase_error = np.angle(
+        feedback_estimates * np.conj(true_data_channels)
+    ).astype(np.float64)
+    return ChannelFeedbackResult(
+        pilot_epoch_s=float(pilot_epoch_s),
+        data_epoch_s=float(data_epoch_s),
+        raw_channel_estimates=raw_estimates,
+        feedback_channel_estimates=feedback_estimates,
+        true_effective_channels_at_data=true_data_channels,
+        phase_error_at_data_rad=phase_error,
+    )

@@ -91,3 +91,33 @@ def run_clock_tracking(
         residual_after_s=residual_after_s,
         random_walk_accumulated_s=random_walk_accumulated_s,
     )
+
+
+def reconstruct_raw_offset_estimate(
+    result: ClockTrackingResult,
+) -> np.ndarray:
+    """仅由每轮残差估计和此前控制命令重建未校正钟差估计。"""
+
+    estimated_residual = np.asarray(result.estimated_offset_s, dtype=np.float64)
+    commands = np.asarray(result.applied_correction_s, dtype=np.float64)
+    if estimated_residual.ndim != 1 or estimated_residual.size < 1:
+        raise ValueError("时钟跟踪结果必须至少包含一轮")
+    cumulative_before = np.concatenate(
+        (np.zeros(1, dtype=np.float64), np.cumsum(commands[:-1]))
+    )
+    return np.asarray(estimated_residual - cumulative_before, dtype=np.float64)
+
+
+def estimate_clock_frequency_offset(result: ClockTrackingResult) -> float:
+    """拟合重建钟差随真时间的斜率，估计无量纲采样时钟频差。"""
+
+    epoch_s = np.asarray(result.epoch_true_s, dtype=np.float64)
+    if epoch_s.ndim != 1 or epoch_s.size < 2 or not np.all(np.isfinite(epoch_s)):
+        raise ValueError("频率估计至少需要两个有限同步历元")
+    raw_estimate = reconstruct_raw_offset_estimate(result)
+    centered_time = epoch_s - float(np.mean(epoch_s))
+    denominator = float(np.sum(centered_time**2))
+    if denominator <= np.finfo(np.float64).tiny:
+        raise ValueError("同步历元没有足够时间跨度")
+    centered_offset = raw_estimate - float(np.mean(raw_estimate))
+    return float(np.sum(centered_time * centered_offset) / denominator)

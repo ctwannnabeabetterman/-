@@ -8,6 +8,7 @@ import numpy as np
 
 from beamforming import combine_two_ap, simulate_four_sync_states
 from config import BeamformingConfig, WaveformConfig
+from models import BeamformingPlantState
 from phase_sync import complex_los_channel, compute_phase_weights
 from waveforms import generate_two_tone
 
@@ -81,10 +82,16 @@ class FourStateBeamformingTests(unittest.TestCase):
             ap1_amplitude=1.0,
             ap0_channel_phase_rad=0.2,
             ap1_channel_phase_rad=-0.6,
-            ap1_clock_offset_s=12.25e-9,
-            ap1_cfo_hz=600.0,
-            ap1_initial_phase_rad=1.1,
             normalization="per_ap_fixed",
+        )
+        plant_state = BeamformingPlantState(
+            data_epoch_s=0.1,
+            raw_clock_offset_s=12.25e-9,
+            residual_clock_offset_s=0.0,
+            raw_frequency_offset_hz=600.0,
+            residual_frequency_offset_hz=0.0,
+            raw_ap1_phase_rad=1.1,
+            residual_ap1_phase_rad=1.1,
         )
         h0 = complex_los_channel(
             config.ap0_amplitude,
@@ -97,14 +104,13 @@ class FourStateBeamformingTests(unittest.TestCase):
             config.ap1_propagation_delay_s,
             waveform_config.carrier_frequency_hz,
             config.ap1_channel_phase_rad,
-        ) * np.exp(1j * config.ap1_initial_phase_rad)
+        ) * np.exp(1j * plant_state.residual_ap1_phase_rad)
 
         states = simulate_four_sync_states(
             waveform.samples,
             waveform_config,
             config,
-            estimated_time_correction_s=-config.ap1_clock_offset_s,
-            estimated_frequency_offset_hz=config.ap1_cfo_hz,
+            plant_state,
             channel_estimates=np.array([h0, h1], dtype=np.complex128),
         )
 
@@ -113,7 +119,10 @@ class FourStateBeamformingTests(unittest.TestCase):
             {"unsynchronized", "time_only", "time_frequency", "full_sync"},
         )
         self.assertAlmostEqual(states["time_only"].residual_arrival_difference_s, 0.0, places=15)
-        self.assertEqual(states["time_only"].residual_frequency_offset_hz, config.ap1_cfo_hz)
+        self.assertEqual(
+            states["time_only"].residual_frequency_offset_hz,
+            plant_state.raw_frequency_offset_hz,
+        )
         self.assertAlmostEqual(states["time_frequency"].residual_frequency_offset_hz, 0.0)
         self.assertLess(abs(states["full_sync"].residual_phase_difference_rad), 1e-12)
         self.assertLess(states["full_sync"].metrics.normalized_ideal_loss_db, 0.01)

@@ -11,6 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from experiments import reconstruct_raw_offset_estimate
 from models import (
     BeamformingResult,
     ClockTrackingResult,
@@ -174,7 +175,7 @@ def plot_clock_tracking(result: ClockTrackingResult, output_dir: str | Path) -> 
 
     configure_paper_style()
     rounds = np.arange(1, result.raw_offset_s.size + 1)
-    cumulative_raw_offset_estimate_s = -np.cumsum(result.applied_correction_s)
+    cumulative_raw_offset_estimate_s = reconstruct_raw_offset_estimate(result)
     fig, axes = plt.subplots(2, 1, figsize=(7.2, 5.5), sharex=True)
     axes[0].plot(rounds, result.raw_offset_s * 1e12, "o-", color=_COLORS[3], label="True raw offset")
     axes[0].plot(rounds, cumulative_raw_offset_estimate_s * 1e12, "s-", color=_COLORS[0], label="Cumulative two-way estimate")
