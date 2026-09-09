@@ -52,8 +52,13 @@ def run_delay_monte_carlo(
     clock_rmse = np.empty(count, dtype=np.float64)
     coherent_gain = np.empty(count, dtype=np.float64)
 
-    rng = np.random.default_rng(config.seed)
-    fractions = rng.uniform(-0.5, 0.5, size=config.trials_per_snr)
+    seed_sequence = np.random.SeedSequence(config.seed)
+    fraction_seed, timing_seed, phase_seed = seed_sequence.spawn(3)
+    fraction_rng = np.random.default_rng(fraction_seed)
+    fractions = fraction_rng.uniform(-0.5, 0.5, size=config.trials_per_snr)
+    trial_count = count * config.trials_per_snr
+    timing_trial_seeds = timing_seed.spawn(trial_count)
+    phase_trial_seeds = phase_seed.spawn(trial_count)
     for snr_index, snr_db in enumerate(snr_axis):
         integer_errors = np.empty(config.trials_per_snr, dtype=np.float64)
         qls_errors = np.empty(config.trials_per_snr, dtype=np.float64)
@@ -62,6 +67,9 @@ def run_delay_monte_carlo(
         coherent_gain_linear = np.empty(config.trials_per_snr, dtype=np.float64)
 
         for trial_index, fraction in enumerate(fractions):
+            seed_index = snr_index * config.trials_per_snr + trial_index
+            timing_rng = np.random.default_rng(timing_trial_seeds[seed_index])
+            phase_rng = np.random.default_rng(phase_trial_seeds[seed_index])
             delay_samples = config.nominal_delay_samples + float(fraction)
             true_delay_s = delay_samples / waveform_config.sample_rate_hz
             link = ChannelConfig(
@@ -87,7 +95,7 @@ def run_delay_monte_carlo(
                 up_link=link,
                 down_link=link,
                 calibration=calibration,
-                rng=rng,
+                rng=timing_rng,
             )
             clock_estimate = estimate_two_way(observation)
             raw_up = observation.up_measurement.raw_estimate
@@ -105,7 +113,7 @@ def run_delay_monte_carlo(
             )
             oscillator = LocalOscillator(
                 frequency_offset_hz=0.0,
-                initial_phase_rad=float(rng.uniform(-np.pi, np.pi)),
+                initial_phase_rad=float(phase_rng.uniform(-np.pi, np.pi)),
             )
             trial_feedback = replace(phase_feedback, snr_db=float(snr_db))
             pilot_epoch_s = two_way.tx1_local_time_s + 1e-3
@@ -116,7 +124,7 @@ def run_delay_monte_carlo(
                 oscillator,
                 residual_clock_offset_s=residual_clock_s,
                 pilot_epoch_s=pilot_epoch_s,
-                rng=rng,
+                rng=phase_rng,
             )
             weights = compute_phase_weights(
                 feedback.feedback_channel_estimates,

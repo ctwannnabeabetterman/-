@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from config import MonteCarloConfig, WaveformConfig
+from config import MonteCarloConfig, PhaseFeedbackConfig, WaveformConfig
 from beamforming import combine_two_ap as real_combine_two_ap
 from lut_calibration import build_qls_lut
 from monte_carlo import run_delay_monte_carlo
@@ -105,6 +105,65 @@ class MonteCarloTests(unittest.TestCase):
 
         self.assertEqual(feedback.call_count, config.trials_per_snr)
         self.assertEqual(combine.call_count, config.trials_per_snr)
+
+    def test_phase_settings_do_not_change_delay_or_clock_statistics(self) -> None:
+        config = MonteCarloConfig(
+            snr_db_values=(24.0,),
+            trials_per_snr=20,
+            seed=97,
+        )
+        short_pilot = run_delay_monte_carlo(
+            self.waveform_config,
+            self.calibration,
+            config,
+            phase_feedback_config=PhaseFeedbackConfig(pilot_symbols=16),
+        )
+        long_pilot = run_delay_monte_carlo(
+            self.waveform_config,
+            self.calibration,
+            config,
+            phase_feedback_config=PhaseFeedbackConfig(pilot_symbols=1024),
+        )
+
+        for field in (
+            "integer_peak_rmse_s",
+            "qls_rmse_s",
+            "lut_rmse_s",
+            "clock_offset_rmse_s",
+        ):
+            np.testing.assert_array_equal(
+                getattr(short_pilot, field),
+                getattr(long_pilot, field),
+            )
+
+    def test_feedback_staleness_matches_two_signal_gain(self) -> None:
+        phase_rate_rad_per_s = 100.0
+        feedback_delay_s = 5e-3
+        result = run_delay_monte_carlo(
+            self.waveform_config,
+            self.calibration,
+            MonteCarloConfig(
+                snr_db_values=(120.0,),
+                trials_per_snr=3,
+                seed=98,
+            ),
+            phase_feedback_config=PhaseFeedbackConfig(
+                pilot_symbols=256,
+                snr_db=120.0,
+                feedback_delay_s=feedback_delay_s,
+                phase_quantization_bits=None,
+                channel_phase_rate_rad_per_s=phase_rate_rad_per_s,
+            ),
+        )
+        expected_gain_db = 10.0 * np.log10(
+            1.0 + np.cos(phase_rate_rad_per_s * feedback_delay_s)
+        )
+
+        self.assertAlmostEqual(
+            result.coherent_gain_vs_incoherent_db[0],
+            expected_gain_db,
+            places=3,
+        )
 
     def test_processing_delay_does_not_change_fixed_seed_clock_rmse(self) -> None:
         base = dict(snr_db_values=(30.0,), trials_per_snr=10, seed=95)

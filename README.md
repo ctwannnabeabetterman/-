@@ -180,7 +180,7 @@ var(tau_hat) >= N0 / (2*zeta_f_squared*Es)
 
 因此 CRLB 和 Monte Carlo 使用相同的输入噪声定义。论文中的预处理 SNR 与这里的活动区每样点 SNR 不应直接混为同一数值。
 
-Monte Carlo 的每个 trial 都执行正式的 `simulate_two_way_exchange()` 和 `estimate_two_way()`，包含未知 AP1 钟差、四个本地时间戳、处理时延以及独立上下行 AWGN。`clock_offset_rmse_ps` 是完整双向时间传递闭环的统计量。每个 trial 随后还会生成带随机 AP1 初相的 RX 导频、执行 LS 相位反馈，并用补偿后的钟差实际合成两路数据波形；`coherent_gain_vs_incoherent_db` 来自这些波形级合成结果的线性功率平均，不使用钟差到增益的解析捷径。
+Monte Carlo 的每个 trial 都执行正式的 `simulate_two_way_exchange()` 和 `estimate_two_way()`，包含未知 AP1 钟差、四个本地时间戳、处理时延以及独立上下行 AWGN。`clock_offset_rmse_ps` 是完整双向时间传递闭环的统计量。每个 trial 随后还会生成带随机 AP1 初相的 RX 导频、执行 LS 相位反馈，并用补偿后的钟差实际合成两路数据波形；`coherent_gain_vs_incoherent_db` 来自这些波形级合成结果的线性功率平均，不使用钟差到增益的解析捷径。时延/时间戳噪声与相位反馈噪声使用由同一根种子派生的独立 trial 随机数流，因此修改导频长度不会改变时延或钟差统计样本。
 
 ## 快速模式的参考结果
 
