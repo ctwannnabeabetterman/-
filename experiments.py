@@ -27,6 +27,7 @@ def run_clock_tracking(
 
     rounds = tracking_config.rounds
     epoch_true_s = np.empty(rounds, dtype=np.float64)
+    reference_epoch_s = np.empty(rounds, dtype=np.float64)
     raw_offset_s = np.empty(rounds, dtype=np.float64)
     estimated_offset_s = np.empty(rounds, dtype=np.float64)
     applied_correction_s = np.empty(rounds, dtype=np.float64)
@@ -71,6 +72,9 @@ def run_clock_tracking(
             calibration=calibration,
             rng=rng,
         )
+        reference_epoch_s[round_index] = 0.5 * (
+            observation.t_rx0_s + observation.t_tx0_s
+        )
         estimate = estimate_two_way(observation)
         correction = tracking_config.correction_gain * estimate.clock_correction_s
         estimated_offset_s[round_index] = estimate.ap1_offset_estimate_s
@@ -84,6 +88,7 @@ def run_clock_tracking(
 
     return ClockTrackingResult(
         epoch_true_s=epoch_true_s,
+        reference_epoch_s=reference_epoch_s,
         raw_offset_s=raw_offset_s,
         estimated_offset_s=estimated_offset_s,
         applied_correction_s=applied_correction_s,
@@ -109,9 +114,9 @@ def reconstruct_raw_offset_estimate(
 
 
 def estimate_clock_frequency_offset(result: ClockTrackingResult) -> float:
-    """拟合重建钟差随真时间的斜率，估计无量纲采样时钟频差。"""
+    """拟合重建钟差随 AP0 时间戳历元的斜率，估计采样时钟频差。"""
 
-    epoch_s = np.asarray(result.epoch_true_s, dtype=np.float64)
+    epoch_s = np.asarray(result.reference_epoch_s, dtype=np.float64)
     if epoch_s.ndim != 1 or epoch_s.size < 2 or not np.all(np.isfinite(epoch_s)):
         raise ValueError("频率估计至少需要两个有限同步历元")
     raw_estimate = reconstruct_raw_offset_estimate(result)

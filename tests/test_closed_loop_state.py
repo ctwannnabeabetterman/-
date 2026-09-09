@@ -41,6 +41,7 @@ class ClockControlTests(unittest.TestCase):
             accumulated += applied[index]
         result = ClockTrackingResult(
             epoch_true_s=epochs,
+            reference_epoch_s=epochs,
             raw_offset_s=np.full(5, np.nan),
             estimated_offset_s=estimated_residual,
             applied_correction_s=applied,
@@ -54,6 +55,35 @@ class ClockControlTests(unittest.TestCase):
 
         np.testing.assert_allclose(reconstructed, true_offset, atol=1e-18)
         self.assertAlmostEqual(rate, 0.2e-6, places=15)
+
+    def test_clock_rate_estimate_ignores_diagnostic_true_time(self) -> None:
+        reference_epochs = np.arange(5, dtype=np.float64)
+        observed_offset = 30e-9 + 0.2e-6 * reference_epochs
+        base = ClockTrackingResult(
+            epoch_true_s=reference_epochs,
+            reference_epoch_s=reference_epochs,
+            raw_offset_s=np.full(5, np.nan),
+            estimated_offset_s=observed_offset,
+            applied_correction_s=np.zeros(5),
+            residual_before_s=np.zeros(5),
+            residual_after_s=np.zeros(5),
+            random_walk_accumulated_s=np.zeros(5),
+        )
+        altered_truth = ClockTrackingResult(
+            epoch_true_s=reference_epochs * 2.0 + 100.0,
+            reference_epoch_s=reference_epochs,
+            raw_offset_s=base.raw_offset_s,
+            estimated_offset_s=base.estimated_offset_s,
+            applied_correction_s=base.applied_correction_s,
+            residual_before_s=base.residual_before_s,
+            residual_after_s=base.residual_after_s,
+            random_walk_accumulated_s=base.random_walk_accumulated_s,
+        )
+
+        self.assertEqual(
+            estimate_clock_frequency_offset(base),
+            estimate_clock_frequency_offset(altered_truth),
+        )
 
 
 class OscillatorControlTests(unittest.TestCase):

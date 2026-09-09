@@ -231,6 +231,7 @@ def _save_numeric_tables(
             {
                 "round": np.arange(1, clock_result.raw_offset_s.size + 1),
                 "epoch_ms": clock_result.epoch_true_s * 1e3,
+                "reference_epoch_ms": clock_result.reference_epoch_s * 1e3,
                 "true_raw_offset_ps": clock_result.raw_offset_s * 1e12,
                 "estimated_residual_before_ps": clock_result.estimated_offset_s * 1e12,
                 "estimated_raw_offset_ps": reconstruct_raw_offset_estimate(clock_result)

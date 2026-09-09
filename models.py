@@ -135,6 +135,7 @@ class ClockTrackingResult:
     """多轮同步的真值、估计、校正和残差时间序列，单位均为秒。"""
 
     epoch_true_s: FloatArray
+    reference_epoch_s: FloatArray
     raw_offset_s: FloatArray
     estimated_offset_s: FloatArray
     applied_correction_s: FloatArray
