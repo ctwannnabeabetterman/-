@@ -50,7 +50,8 @@ class PhaseFeedbackLoopTests(unittest.TestCase):
             rng=np.random.default_rng(92),
         )
 
-        expected_ap1_error = -2.0 * np.pi * residual_hz * gap_s
+        # Feedback is available after the complete pilot, not its centre.
+        expected_ap1_error = -2.0 * np.pi * residual_hz * (result.data_epoch_s-result.pilot_epoch_s)
         self.assertAlmostEqual(
             result.phase_error_at_data_rad[1], expected_ap1_error, places=5
         )

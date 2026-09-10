@@ -13,6 +13,8 @@ from lut_calibration import build_qls_lut
 from monte_carlo import run_delay_monte_carlo
 from phase_sync import simulate_channel_feedback as real_simulate_channel_feedback
 from two_way_sync import simulate_two_way_exchange as real_simulate_two_way_exchange
+from frequency_sync import estimate_frequency_offset as real_estimate_frequency_offset
+from acquisition import AcquisitionError
 
 
 class MonteCarloTests(unittest.TestCase):
@@ -184,6 +186,30 @@ class MonteCarloTests(unittest.TestCase):
             rtol=0.0,
             atol=1e-16,
         )
+
+    def test_every_trial_estimates_a_nonzero_random_frequency(self) -> None:
+        cfg = MonteCarloConfig(snr_db_values=(36.,), trials_per_snr=4)
+        with patch('monte_carlo.estimate_frequency_offset', wraps=real_estimate_frequency_offset) as estimator:
+            result = run_delay_monte_carlo(self.waveform_config, self.calibration, cfg)
+        self.assertEqual(estimator.call_count, 4)
+        self.assertTrue(all(abs(call.args[1].cfo_hz) > 0 for call in estimator.call_args_list))
+        self.assertLess(result.residual_frequency_rmse_hz[0], 5.)
+
+    def test_capture_failure_is_counted_and_all_failed_is_not_success(self) -> None:
+        cfg = MonteCarloConfig(snr_db_values=(36.,), trials_per_snr=4)
+        calls = 0
+        def fail_once(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise AcquisitionError('test_missing_packet')
+            return real_simulate_two_way_exchange(*args, **kwargs)
+        with patch('monte_carlo.simulate_two_way_exchange', side_effect=fail_once):
+            result = run_delay_monte_carlo(self.waveform_config, self.calibration, cfg)
+        self.assertEqual(result.acquisition_failure_rate[0], .25)
+        with patch('monte_carlo.simulate_two_way_exchange', side_effect=AcquisitionError('missing')):
+            with self.assertRaises(AcquisitionError):
+                run_delay_monte_carlo(self.waveform_config, self.calibration, cfg)
 
 
 if __name__ == "__main__":

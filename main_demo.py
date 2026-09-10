@@ -15,6 +15,7 @@ from beamforming import simulate_four_sync_states
 from channel import propagate_static_link
 from clock_model import LocalClock
 from config import (
+    JointTrackingConfig,
     BeamformingConfig,
     ChannelConfig,
     ClockPlantConfig,
@@ -61,6 +62,7 @@ from plotting import (
 )
 from results_io import write_csv_columns, write_json
 from waveforms import generate_two_tone
+from joint_sync import run_joint_tracking
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,7 @@ class DemoSettings:
     monte_carlo: MonteCarloConfig
     lut_grid_points: int
     frequency_rounds: int
+    joint_tracking: JointTrackingConfig
 
 
 def build_demo_settings(mode: str) -> DemoSettings:
@@ -90,7 +93,7 @@ def build_demo_settings(mode: str) -> DemoSettings:
     formal = mode == "formal"
     waveform = WaveformConfig(pulse_duration_s=10e-6 if formal else 2e-6)
     frequency = FrequencySyncConfig(
-        observation_duration_s=2e-3 if formal else 200e-6,
+        observation_duration_s=2e-3 if formal else 1e-3,
         segment_duration_s=50e-6 if formal else 20e-6,
         cfo_hz=600.0,
         sample_clock_offset_fraction=0.0,
@@ -125,7 +128,7 @@ def build_demo_settings(mode: str) -> DemoSettings:
         ),
         beamforming=BeamformingConfig(
             ap0_propagation_delay_s=50e-9,
-            ap1_propagation_delay_s=50e-9,
+            ap1_propagation_delay_s=75e-9,
             ap0_amplitude=1.0,
             ap1_amplitude=0.9,
             ap0_channel_phase_rad=0.2,
@@ -142,6 +145,7 @@ def build_demo_settings(mode: str) -> DemoSettings:
         monte_carlo=monte_carlo,
         lut_grid_points=2001 if formal else 401,
         frequency_rounds=20 if formal else 12,
+        joint_tracking=JointTrackingConfig(rounds=100 if formal else 40),
     )
 
 
@@ -294,6 +298,8 @@ def _save_numeric_tables(
                 "crlb_std_ps": monte_carlo.crlb_std_s * 1e12,
                 "clock_offset_rmse_ps": monte_carlo.clock_offset_rmse_s * 1e12,
                 "coherent_gain_vs_incoherent_db": monte_carlo.coherent_gain_vs_incoherent_db,
+                "residual_frequency_rmse_hz": monte_carlo.residual_frequency_rmse_hz,
+                "acquisition_failure_rate": monte_carlo.acquisition_failure_rate,
             },
         ),
     ]
@@ -366,6 +372,7 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
     )
 
     clock_frequency_estimate = estimate_clock_frequency_offset(clock_result)
+    time_only_clock = replace(ap1_clock)
     clock_control_epoch_s = float(clock_result.epoch_true_s[-1])
     ap1_clock.apply_frequency_correction(
         clock_frequency_estimate,
@@ -402,6 +409,7 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         residual_clock_offset_s=residual_clock_at_pilot_s,
         pilot_epoch_s=pilot_epoch_s,
         rng=rng,
+        calibration=calibration,
     )
     data_epoch_s = channel_feedback.data_epoch_s
     channel_phase_rate_rad_per_s = (
@@ -410,6 +418,7 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
     channel_phase_at_data_rad = channel_phase_rate_rad_per_s * data_epoch_s
     channel_frequency_offset_hz = channel_phase_rate_rad_per_s / (2.0 * np.pi)
     plant_state = BeamformingPlantState(
+        time_only_clock_offset_s=time_only_clock.residual_offset_at(data_epoch_s),
         data_epoch_s=data_epoch_s,
         raw_clock_offset_s=ap1_clock.raw_offset_at(data_epoch_s),
         residual_clock_offset_s=ap1_clock.residual_offset_at(data_epoch_s),
@@ -432,6 +441,7 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         settings.beamforming,
         plant_state,
         channel_estimates=channel_feedback.feedback_channel_estimates,
+        tx_time_correction_s=channel_feedback.tx_time_correction_s,
     )
 
     monte_carlo = run_delay_monte_carlo(
@@ -441,6 +451,12 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         beamforming_config=settings.beamforming,
         phase_feedback_config=settings.phase_feedback,
     )
+    joint_result = run_joint_tracking(settings.waveform, calibration, settings.clock_plant,
+        settings.oscillator, settings.frequency, settings.beamforming, settings.phase_feedback,
+        settings.joint_tracking, settings.two_way)
+    joint_rows = joint_result["rows"]
+    write_csv_columns(destination / "joint_tracking.csv",
+        {key: [row[key] for row in joint_rows] for key in joint_rows[0]})
 
     raw_lut_bias = np.asarray(
         wrap_fractional_sample(
@@ -456,6 +472,8 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
             "arrival_difference_ps": value.residual_arrival_difference_s * 1e12,
             "residual_frequency_hz": value.residual_frequency_offset_hz,
             "residual_phase_deg": float(np.rad2deg(value.residual_phase_difference_rad)),
+            "carrier_phase_deg": float(np.rad2deg(value.carrier_phase_difference_rad)),
+            "waveform_coherence": value.waveform_coherence,
             "combined_power": value.signal_power,
             "gain_vs_single_ap_db": value.metrics.gain_vs_single_ap_db,
             "gain_vs_incoherent_sum_db": value.metrics.gain_vs_incoherent_sum_db,
@@ -466,6 +484,7 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
     summary: dict[str, object] = {
         "mode": settings.mode,
         "seed": settings.seed,
+        "joint_tracking": joint_result["summary"],
         "runtime": {
             "python": platform.python_version(),
             "platform": platform.platform(),
@@ -480,6 +499,7 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
                 "sample_clock_rate": "slope of reconstructed two-way offset estimates",
                 "oscillator_frequency": "tracked reference phase-slope estimate",
                 "transmit_phase": "quantized RX pilot LS feedback",
+                "transmit_delay": "RX two-burst timestamp difference feedback",
             },
             "plant_at_data_epoch": {
                 "data_epoch_s": plant_state.data_epoch_s,
@@ -553,6 +573,8 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
             "final_residual_hz": oscillator.residual_frequency_offset_hz,
         },
         "channel_feedback": {
+            "measured_arrival_difference_ps": channel_feedback.measured_arrival_difference_s * 1e12,
+            "applied_tx_time_correction_ps": channel_feedback.tx_time_correction_s * 1e12,
             "pilot_epoch_s": channel_feedback.pilot_epoch_s,
             "data_epoch_s": channel_feedback.data_epoch_s,
             "feedback_delay_us": settings.phase_feedback.feedback_delay_s * 1e6,
@@ -572,6 +594,8 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         },
         "beamforming": beamforming_summary,
         "monte_carlo_highest_snr": {
+            "residual_frequency_rmse_hz": float(monte_carlo.residual_frequency_rmse_hz[-1]),
+            "acquisition_failure_rate": float(monte_carlo.acquisition_failure_rate[-1]),
             "snr_db": float(monte_carlo.snr_db[-1]),
             "integer_peak_rmse_ps": float(monte_carlo.integer_peak_rmse_s[-1] * 1e12),
             "qls_rmse_ps": float(monte_carlo.qls_rmse_s[-1] * 1e12),
@@ -630,6 +654,7 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
             "frequency_tracking.csv",
             "beamforming_states.csv",
             "monte_carlo.csv",
+            "joint_tracking.csv",
         ],
         "summary": "summary.json",
         "configuration": "run_config.json",

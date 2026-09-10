@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from channel import propagate_static_link
+from acquisition import measure_capture, simulate_capture, sync_burst
 from clock_model import LocalClock
 from config import ChannelConfig, TwoWayConfig, WaveformConfig
-from delay_estimator import DelaySearchGate, estimate_delay, fft_matched_filter
-from lut_calibration import correct_qls_fraction, wrap_fractional_sample
 from models import LinkDelayMeasurement, QLSCalibration, TwoWayEstimate, TwoWayObservation
-from waveforms import generate_two_tone
 
 
 def _measure_link_delay(
@@ -20,37 +17,31 @@ def _measure_link_delay(
     gate_half_width_samples: float,
     calibration: QLSCalibration,
     rng: np.random.Generator,
+    tx_clock: LocalClock,
+    rx_clock: LocalClock,
+    tx_local_s: float,
+    schedule: TwoWayConfig,
 ) -> LinkDelayMeasurement:
-    """经静态链路和正式匹配滤波路径测量一次单向传播时延。"""
-
-    waveform = generate_two_tone(waveform_config)
-    received = propagate_static_link(
-        waveform.samples,
-        sample_rate_hz=waveform_config.sample_rate_hz,
-        config=link,
-        rng=rng,
-    )
-    correlation = fft_matched_filter(received.samples, waveform.samples)
-    gate = DelaySearchGate(
-        center_s=coarse_delay_s,
-        half_width_s=gate_half_width_samples / waveform_config.sample_rate_hz,
-    )
-    raw = estimate_delay(correlation, waveform_config.sample_rate_hz, gate)
-    if not raw.qls_valid:
-        raise RuntimeError("单向时延测量的 QLS 插值无效")
-    corrected_fraction = float(
-        correct_qls_fraction(raw.fractional_offset_samples, calibration)
-    )
-    lut_adjustment = float(
-        wrap_fractional_sample(corrected_fraction - raw.fractional_offset_samples)
-    )
-    corrected_delay_s = raw.delay_s + lut_adjustment / waveform_config.sample_rate_hz
-    return LinkDelayMeasurement(
-        raw_estimate=raw,
-        corrected_delay_s=float(corrected_delay_s),
-        lut_adjustment_samples=lut_adjustment,
-        measured_snr_db=received.measured_snr_db,
-    )
+    """在接收机本地调度窗口内采样；算法只读 IQ 和首样点时间戳。"""
+    burst, _, prefix = sync_burst(waveform_config)
+    fs = waveform_config.sample_rate_hz
+    burst_tx_local = tx_local_s - prefix/fs
+    # The announced transmitter timestamp and public coarse range set the window;
+    # neither the true clock offset nor the actual propagation delay centres it.
+    rx_start_local = burst_tx_local + coarse_delay_s - schedule.receive_pretrigger_s
+    duration = schedule.receive_window_s
+    if duration is None:
+        duration = len(burst)/fs + 2*schedule.receive_pretrigger_s
+    tx_true = tx_clock.true_time_for_reading(burst_tx_local)
+    rx_true = rx_clock.true_time_for_reading(rx_start_local)
+    source_start = (rx_true-tx_true-link.propagation_delay_s)*fs*tx_clock.effective_rate
+    capture = simulate_capture(burst, fs, start_local_s=rx_start_local,
+        start_source_sample=source_start,
+        sample_step=tx_clock.effective_rate/rx_clock.effective_rate,
+        count=int(np.ceil(duration*fs)), amplitude=link.amplitude*np.exp(1j*link.phase_rad),
+        snr_db=link.snr_db, rng=rng)
+    return measure_capture(capture, waveform_config, calibration,
+        threshold=schedule.acquisition_threshold, fine_half_width_samples=gate_half_width_samples)
 
 
 def simulate_two_way_exchange(
@@ -66,7 +57,6 @@ def simulate_two_way_exchange(
     """模拟 AP1→AP0→AP1 交换并保存四个本地时间戳。"""
 
     t_tx1_local = two_way_config.tx1_local_time_s
-    t_tx1_true = ap1_clock.true_time_for_reading(t_tx1_local)
     up_measurement = _measure_link_delay(
         waveform_config,
         up_link,
@@ -74,14 +64,14 @@ def simulate_two_way_exchange(
         two_way_config.gate_half_width_samples,
         calibration,
         rng,
+        ap1_clock, ap0_clock, t_tx1_local, two_way_config,
     )
-    t_rx0_local = (
-        ap0_clock.read_time(t_tx1_true)
-        + ap0_clock.effective_rate * up_measurement.corrected_delay_s
-    )
+    t_rx0_local = up_measurement.capture_start_local_s + up_measurement.corrected_delay_s
 
-    t_tx0_local = t_rx0_local + two_way_config.processing_delay_s
-    t_tx0_true = ap0_clock.true_time_for_reading(t_tx0_local)
+    # Reply preamble starts after reception of the full pulse and processing.
+    _, _, prefix = sync_burst(waveform_config)
+    t_tx0_local = (t_rx0_local + waveform_config.pulse_duration_s
+                  + two_way_config.processing_delay_s + prefix/waveform_config.sample_rate_hz)
     down_measurement = _measure_link_delay(
         waveform_config,
         down_link,
@@ -89,11 +79,9 @@ def simulate_two_way_exchange(
         two_way_config.gate_half_width_samples,
         calibration,
         rng,
+        ap0_clock, ap1_clock, t_tx0_local, two_way_config,
     )
-    t_rx1_local = (
-        ap1_clock.read_time(t_tx0_true)
-        + ap1_clock.effective_rate * down_measurement.corrected_delay_s
-    )
+    t_rx1_local = down_measurement.capture_start_local_s + down_measurement.corrected_delay_s
 
     return TwoWayObservation(
         t_tx1_s=float(t_tx1_local),

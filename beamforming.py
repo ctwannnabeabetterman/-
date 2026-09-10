@@ -107,7 +107,12 @@ def combine_two_ap(
         * tx_weights[1]
         * np.exp(1j * 2.0 * np.pi * residual_frequency_offset_hz * reference_time_s)
     )
-    phase_difference = float(np.angle(effective1 * np.conj(effective0)))
+    carrier_phase_difference = float(np.angle(effective1 * np.conj(effective0)))
+    cross_power = np.vdot(contribution0[window], contribution1[window])
+    phase_difference = float(np.angle(cross_power))
+    coherence = float(abs(cross_power) / max(np.sqrt(
+        np.vdot(contribution0[window], contribution0[window]).real *
+        np.vdot(contribution1[window], contribution1[window]).real), np.finfo(float).tiny))
 
     metrics = BeamformingMetrics(
         gain_vs_single_ap_db=_power_ratio_db(signal_power, single_reference),
@@ -127,6 +132,8 @@ def combine_two_ap(
         residual_frequency_offset_hz=float(residual_frequency_offset_hz),
         residual_phase_difference_rad=phase_difference,
         metrics=metrics,
+        carrier_phase_difference_rad=carrier_phase_difference,
+        waveform_coherence=coherence,
     )
 
 
@@ -137,6 +144,7 @@ def simulate_four_sync_states(
     plant_state: BeamformingPlantState,
     *,
     channel_estimates: ArrayLike,
+    tx_time_correction_s: float = 0.0,
 ) -> dict[str, BeamformingResult]:
     """从显式 plant 快照比较四种状态，不在此处接收控制器估计量。"""
 
@@ -206,7 +214,11 @@ def simulate_four_sync_states(
     states["time_only"] = combine_two_ap(
         baseband_samples,
         waveform_config.sample_rate_hz,
-        time_corrected_delays,
+        np.array([config.ap0_propagation_delay_s,
+                  config.ap1_propagation_delay_s - (
+                      plant_state.time_only_clock_offset_s
+                      if plant_state.time_only_clock_offset_s is not None
+                      else plant_state.residual_clock_offset_s)]),
         raw_channels,
         uncorrected_weights,
         plant_state.raw_frequency_offset_hz,
@@ -224,7 +236,7 @@ def simulate_four_sync_states(
     states["full_sync"] = combine_two_ap(
         baseband_samples,
         waveform_config.sample_rate_hz,
-        time_corrected_delays,
+        time_corrected_delays + np.array([0., tx_time_correction_s]),
         corrected_channels,
         phase_weights,
         plant_state.residual_frequency_offset_hz,

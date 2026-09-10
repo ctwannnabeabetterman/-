@@ -25,7 +25,10 @@ class ResultAcceptanceTests(unittest.TestCase):
         (root / "manifest.json").write_text(
             json.dumps({"figure_count": 20, "figures": names}), encoding="utf-8"
         )
+        (root / "joint_tracking.csv").write_text("round,locked\n0,True\n", encoding="utf-8")
         summary = {
+            "joint_tracking": {"steady_max_clock_error_ps": 5., "steady_max_arrival_error_ps": 5.,
+                "steady_max_phase_error_deg": 1., "locked_fraction": .99, "acquisition_failure_rate": 0.},
             "lut": {"raw_rmse_ps": 20.0, "corrected_rmse_ps": 1.0},
             "clock_tracking": {
                 "final_residual_after_update_ps": 2.0,
@@ -49,12 +52,14 @@ class ResultAcceptanceTests(unittest.TestCase):
             "beamforming": {
                 "unsynchronized": {"combined_power": 1.0},
                 "full_sync": {
+                    "arrival_difference_ps": 2.,
                     "combined_power": 3.9,
                     "gain_vs_incoherent_sum_db": 3.0,
                     "normalized_ideal_loss_db": 0.001,
                 },
             },
             "monte_carlo_highest_snr": {
+                "acquisition_failure_rate": 0.,
                 "integer_peak_rmse_ps": 1400.0,
                 "qls_rmse_ps": 24.0,
                 "qls_lut_rmse_ps": 2.0,
@@ -83,6 +88,18 @@ class ResultAcceptanceTests(unittest.TestCase):
 
         self.assertFalse(report["passed"])
         self.assertFalse(report["checks"]["full_sync_ideal_loss"])
+
+    def test_good_snapshot_cannot_hide_holdover_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_valid_result(root)
+            path = root / "summary.json"
+            summary = json.loads(path.read_text(encoding="utf-8"))
+            summary["joint_tracking"]["steady_max_arrival_error_ps"] = 500.
+            path.write_text(json.dumps(summary), encoding="utf-8")
+            report = verify_output(root)
+        self.assertFalse(report["passed"])
+        self.assertFalse(report["checks"]["joint_arrival_holdover"])
 
 
 if __name__ == "__main__":

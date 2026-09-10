@@ -75,6 +75,9 @@ class TwoWayConfig:
     coarse_up_delay_s: float = 50e-9
     coarse_down_delay_s: float = 50e-9
     gate_half_width_samples: float = 2.5
+    receive_pretrigger_s: float = 2e-6
+    receive_window_s: float | None = None
+    acquisition_threshold: float = 0.45
 
     def __post_init__(self) -> None:
         values = (
@@ -83,6 +86,8 @@ class TwoWayConfig:
             self.coarse_up_delay_s,
             self.coarse_down_delay_s,
             self.gate_half_width_samples,
+            self.receive_pretrigger_s,
+            self.acquisition_threshold,
         )
         if not all(math.isfinite(value) for value in values):
             raise ValueError("双向时间传递配置必须为有限数")
@@ -92,6 +97,12 @@ class TwoWayConfig:
             raise ValueError("粗传播时延必须为非负数")
         if self.gate_half_width_samples < 1.0:
             raise ValueError("gate_half_width_samples 至少为 1")
+        if self.receive_pretrigger_s < 0 or not 0 < self.acquisition_threshold < 1:
+            raise ValueError("接收前置时间须非负，捕获门限须位于 (0, 1)")
+        if self.receive_window_s is not None and (
+            not math.isfinite(self.receive_window_s) or self.receive_window_s <= 0
+        ):
+            raise ValueError("接收窗口须为正有限秒数")
 
 
 @dataclass(frozen=True)
@@ -239,15 +250,20 @@ class PhaseFeedbackConfig:
     feedback_delay_s: float = 100e-6
     phase_quantization_bits: int | None = 12
     channel_phase_rate_rad_per_s: float = 0.0
+    alignment_enabled: bool = True
+    alignment_window_margin_s: float = 2e-6
 
     def __post_init__(self) -> None:
         if self.pilot_symbols < 16:
             raise ValueError("pilot_symbols 至少为 16")
-        values = (self.snr_db, self.feedback_delay_s, self.channel_phase_rate_rad_per_s)
+        values = (self.snr_db, self.feedback_delay_s, self.channel_phase_rate_rad_per_s,
+                  self.alignment_window_margin_s)
         if not all(math.isfinite(value) for value in values):
             raise ValueError("相位反馈配置必须为有限数")
         if self.feedback_delay_s < 0.0:
             raise ValueError("feedback_delay_s 必须为非负数")
+        if self.alignment_window_margin_s <= 0:
+            raise ValueError("到达差测量窗口余量必须为正")
         if self.phase_quantization_bits is not None and self.phase_quantization_bits < 2:
             raise ValueError("phase_quantization_bits 必须至少为 2 或 None")
 
@@ -264,6 +280,8 @@ class MonteCarloConfig:
     noise_bandwidth_hz: float | None = None
     clock_offset_truth_s: float = 100e-9
     processing_delay_s: float = 20e-6
+    initial_cfo_limit_hz: float = 1000.0
+    frequency_observation_s: float = 100e-6
 
     def __post_init__(self) -> None:
         if len(self.snr_db_values) == 0:
@@ -284,3 +302,43 @@ class MonteCarloConfig:
             raise ValueError("clock_offset_truth_s 必须为有限数")
         if not math.isfinite(self.processing_delay_s) or self.processing_delay_s < 0.0:
             raise ValueError("processing_delay_s 必须为非负有限数")
+        if not math.isfinite(self.initial_cfo_limit_hz) or not 0 <= self.initial_cfo_limit_hz < 25000:
+            raise ValueError("初始频偏须位于 20 us 分段捕获区间 [0, 25000) Hz 内")
+        if not math.isfinite(self.frequency_observation_s) or self.frequency_observation_s < 40e-6:
+            raise ValueError("频率观测时间须至少 40 us")
+
+
+@dataclass(frozen=True)
+class JointTrackingConfig:
+    """持续联合同步、漂移、掉帧及锁定判据。"""
+
+    rounds: int = 100
+    interval_s: float = 50e-3
+    seed: int = 42023
+    clock_rate_walk_std: float = 1e-12
+    oscillator_walk_std_hz: float = 0.02
+    holdover_points: int = 9
+    rate_fit_window: int = 8
+    max_arrival_error_s: float = 20e-12
+    max_phase_error_rad: float = 0.1
+    min_gain_db: float = 2.9
+    dropout_rounds: tuple[int, ...] = ()
+    frequency_step_round: int | None = None
+    frequency_step_hz: float = 100.0
+
+    def __post_init__(self) -> None:
+        if self.rounds < 3 or self.holdover_points < 2 or self.rate_fit_window < 2:
+            raise ValueError("联合跟踪至少三轮、每周期至少两个保持观测点")
+        values = (self.interval_s, self.clock_rate_walk_std, self.oscillator_walk_std_hz,
+                  self.max_arrival_error_s, self.max_phase_error_rad, self.min_gain_db,
+                  self.frequency_step_hz)
+        if not all(math.isfinite(v) for v in values):
+            raise ValueError("联合跟踪参数必须有限")
+        if min(self.interval_s, self.max_arrival_error_s, self.max_phase_error_rad) <= 0:
+            raise ValueError("周期和锁定误差阈值必须为正")
+        if min(self.clock_rate_walk_std, self.oscillator_walk_std_hz) < 0:
+            raise ValueError("随机游走标准差不能为负")
+        if any(i < 0 or i >= self.rounds for i in self.dropout_rounds):
+            raise ValueError("掉帧轮次超出范围")
+        if self.frequency_step_round is not None and not 0 <= self.frequency_step_round < self.rounds:
+            raise ValueError("频偏突变轮次超出范围")

@@ -1,8 +1,12 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "expected_figure_pairs": 10,
   "max_clock_residual_ps": 20.0,
   "max_frequency_residual_fraction": 0.02,
   "min_full_sync_gain_vs_incoherent_db": 2.9,
-  "max_full_sync_ideal_loss_db": 0.05
+  "max_full_sync_ideal_loss_db": 0.05,
+  "max_arrival_error_ps": 20.0,
+  "max_phase_error_deg": 5.73,
+  "max_acquisition_failure_rate": 0.01,
+  "min_joint_locked_fraction": 0.9
 }

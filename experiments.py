@@ -75,6 +75,12 @@ def run_clock_tracking(
         reference_epoch_s[round_index] = 0.5 * (
             observation.t_rx0_s + observation.t_tx0_s
         )
+        current_true_time_s = (ap1_clock.true_time_for_reading(observation.t_rx1_s)
+                              + waveform_config.pulse_duration_s/ap1_clock.effective_rate)
+        epoch_true_s[round_index] = current_true_time_s
+        raw_offset_s[round_index] = ap1_clock.raw_offset_at(current_true_time_s)
+        residual_before_s[round_index] = (ap1_clock.read_time(current_true_time_s)
+                                        - ap0_clock.read_time(current_true_time_s))
         estimate = estimate_two_way(observation)
         correction = tracking_config.correction_gain * estimate.clock_correction_s
         estimated_offset_s[round_index] = estimate.ap1_offset_estimate_s

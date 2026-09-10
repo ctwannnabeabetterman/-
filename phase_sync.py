@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -11,6 +12,39 @@ from channel import add_awgn, apply_fractional_delay
 from config import BeamformingConfig, PhaseFeedbackConfig, WaveformConfig
 from models import ChannelFeedbackResult
 from oscillator_model import LocalOscillator
+from acquisition import measure_capture, simulate_capture, sync_burst
+from lut_calibration import build_qls_lut
+from models import QLSCalibration
+
+
+@lru_cache(maxsize=8)
+def _alignment_lut(config: WaveformConfig) -> QLSCalibration:
+    """复用离线标定，避免每个导频试验重复建表。"""
+    return build_qls_lut(config, grid_points=2001)
+
+
+def estimate_rx_arrival_difference(
+    waveform_config: WaveformConfig, beamforming_config: BeamformingConfig,
+    feedback_config: PhaseFeedbackConfig, residual_clock_offset_s: float,
+    rng: np.random.Generator, calibration: QLSCalibration | None = None,
+) -> float:
+    """分时探测两路到达时间，以 RX 本地时间戳之差生成反馈。"""
+    lut = calibration if calibration is not None else _alignment_lut(waveform_config)
+    burst, _, prefix = sync_burst(waveform_config)
+    fs = waveform_config.sample_rate_hz
+    margin = feedback_config.alignment_window_margin_s
+    count = len(burst) + int(np.ceil(2*margin*fs))
+    delays = (beamforming_config.ap0_propagation_delay_s,
+              beamforming_config.ap1_propagation_delay_s-residual_clock_offset_s)
+    amplitudes = (beamforming_config.ap0_amplitude, beamforming_config.ap1_amplitude)
+    observations = []
+    for delay, amplitude in zip(delays, amplitudes):
+        capture = simulate_capture(burst, fs, start_local_s=-margin,
+            start_source_sample=(-margin-delay)*fs, sample_step=1., count=count,
+            amplitude=complex(amplitude), snr_db=feedback_config.snr_db, rng=rng)
+        measurement = measure_capture(capture, waveform_config, lut)
+        observations.append(capture.start_local_s + measurement.corrected_delay_s-prefix/fs)
+    return float(observations[1]-observations[0])
 
 
 def complex_los_channel(
@@ -98,6 +132,7 @@ def simulate_channel_feedback(
     residual_clock_offset_s: float,
     pilot_epoch_s: float,
     rng: np.random.Generator,
+    calibration: QLSCalibration | None = None,
 ) -> ChannelFeedbackResult:
     """通过与数据共享的时钟和本振轨迹生成 RX 导频反馈。
 
@@ -113,7 +148,13 @@ def simulate_channel_feedback(
         np.arange(count, dtype=np.float64) - 0.5 * (count - 1)
     ) / waveform_config.sample_rate_hz
     absolute_time_s = pilot_epoch_s + centered_time_s
-    data_epoch_s = pilot_epoch_s + feedback_config.feedback_delay_s
+    data_epoch_s = pilot_epoch_s + count/(2*waveform_config.sample_rate_hz) + feedback_config.feedback_delay_s
+    measured_arrival = 0.0
+    if feedback_config.alignment_enabled:
+        measured_arrival = estimate_rx_arrival_difference(
+            waveform_config, beamforming_config, feedback_config,
+            residual_clock_offset_s, rng, calibration)
+    tx_time_correction_s = -measured_arrival
     pilot = np.exp(
         1j * np.pi / 2.0 * rng.integers(0, 4, size=count)
     ).astype(np.complex128)
@@ -132,7 +173,9 @@ def simulate_channel_feedback(
     )
     delayed_ap1_pilot = apply_fractional_delay(
         pilot,
-        -residual_clock_offset_s,
+        beamforming_config.ap1_propagation_delay_s
+        - beamforming_config.ap0_propagation_delay_s
+        - residual_clock_offset_s + tx_time_correction_s,
         waveform_config.sample_rate_hz,
     )
     ap1_phase_rad = np.array(
@@ -181,4 +224,6 @@ def simulate_channel_feedback(
         feedback_channel_estimates=feedback_estimates,
         true_effective_channels_at_data=true_data_channels,
         phase_error_at_data_rad=phase_error,
+        tx_time_correction_s=tx_time_correction_s,
+        measured_arrival_difference_s=measured_arrival,
     )

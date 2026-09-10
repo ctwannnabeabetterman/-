@@ -103,7 +103,7 @@ def run_precision_case(sync_config: WaveformConfig, data_config: WaveformConfig,
     beam_config = BeamformingConfig(ap0_propagation_delay_s=0., ap1_propagation_delay_s=0.)
     feedback_config = PhaseFeedbackConfig(pilot_symbols=config.pilot_symbols,
         snr_db=config.pilot_snr_db, feedback_delay_s=config.feedback_delay_s,
-        phase_quantization_bits=12)
+        phase_quantization_bits=12, alignment_enabled=False)
     data = generate_two_tone(data_config)
     output = {name: np.empty(config.trials) for name in (
         'correction_s', 'interarrival_s', 'residual_clock_s', 'gain_db', 'measured_snr_db')}
@@ -127,7 +127,7 @@ def run_precision_case(sync_config: WaveformConfig, data_config: WaveformConfig,
             oscillator, residual_clock_offset_s=residual, pilot_epoch_s=pilot_epoch, rng=phase_rng)
         weights = compute_phase_weights(feedback.feedback_channel_estimates)
         combined = combine_two_ap(data.samples, data_config.sample_rate_hz,
-            np.array([0., -residual]), feedback.true_effective_channels_at_data,
+            np.array([0., -residual + feedback.tx_time_correction_s]), feedback.true_effective_channels_at_data,
             weights, 0., 'fig12_full_sync')
         # 差分仪器抖动及 AWGN 作用于实际已生成的两路数据 IQ。
         difference_jitter = config.readout_jitter_s * readout_rng.standard_normal()

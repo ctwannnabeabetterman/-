@@ -37,6 +37,7 @@ def verify_output(
     frequency = summary["frequency_sync"]
     beamforming = summary["beamforming"]
     monte_carlo = summary["monte_carlo_highest_snr"]
+    joint = summary["joint_tracking"]
     plant = summary["state_separation"]["plant_at_data_epoch"]
     true_frequency_hz = abs(float(frequency["final_true_observed_offset_hz"]))
     residual_frequency_hz = abs(float(frequency["final_residual_hz"]))
@@ -45,6 +46,15 @@ def verify_output(
     )
 
     checks = {
+        "joint_table_present": (root / "joint_tracking.csv").is_file(),
+        "rx_arrival_aligned": abs(float(beamforming["full_sync"]["arrival_difference_ps"]))
+            <= thresholds["max_arrival_error_ps"],
+        "joint_clock_holdover": joint["steady_max_clock_error_ps"] <= thresholds["max_arrival_error_ps"],
+        "joint_arrival_holdover": joint["steady_max_arrival_error_ps"] <= thresholds["max_arrival_error_ps"],
+        "joint_phase_holdover": joint["steady_max_phase_error_deg"] <= thresholds["max_phase_error_deg"],
+        "joint_lock_availability": joint["locked_fraction"] >= thresholds["min_joint_locked_fraction"],
+        "joint_acquisition_success": joint["acquisition_failure_rate"] <= thresholds["max_acquisition_failure_rate"],
+        "monte_carlo_capture_success": monte_carlo["acquisition_failure_rate"] <= thresholds["max_acquisition_failure_rate"],
         "figure_manifest_count": int(manifest.get("figure_count", -1))
         == 2 * expected_pairs,
         "figure_files_present": len(expected_files) == 2 * expected_pairs

@@ -99,12 +99,14 @@ class QLSCalibration:
 
 @dataclass(frozen=True)
 class LinkDelayMeasurement:
-    """单向波形时延测量，时间单位为秒。"""
+    """双音起点相对 ADC 首样点的本地时延；加 capture_start_local_s 得到时间戳。"""
 
     raw_estimate: DelayEstimate
     corrected_delay_s: float
     lut_adjustment_samples: float
     measured_snr_db: float | None
+    capture_start_local_s: float = 0.0
+    acquisition_score: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -192,6 +194,8 @@ class BeamformingResult:
     residual_frequency_offset_hz: float
     residual_phase_difference_rad: float
     metrics: BeamformingMetrics
+    carrier_phase_difference_rad: float = 0.0
+    waveform_coherence: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -208,6 +212,7 @@ class BeamformingPlantState:
     residual_frequency_offset_hz: float
     raw_ap1_phase_rad: float
     residual_ap1_phase_rad: float
+    time_only_clock_offset_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -220,6 +225,8 @@ class ChannelFeedbackResult:
     feedback_channel_estimates: ComplexArray
     true_effective_channels_at_data: ComplexArray
     phase_error_at_data_rad: FloatArray
+    tx_time_correction_s: float = 0.0
+    measured_arrival_difference_s: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -247,3 +254,5 @@ class MonteCarloResult:
     crlb_std_s: FloatArray
     clock_offset_rmse_s: FloatArray
     coherent_gain_vs_incoherent_db: FloatArray
+    residual_frequency_rmse_hz: FloatArray
+    acquisition_failure_rate: FloatArray
