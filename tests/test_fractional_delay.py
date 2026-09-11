@@ -8,7 +8,7 @@ import numpy as np
 
 from channel import add_awgn, apply_fractional_delay, propagate_static_link
 from config import ChannelConfig, WaveformConfig
-from waveforms import generate_two_tone
+from waveforms import generate_two_tone, ideal_two_tone_line_spectrum
 
 
 class WaveformConfigTests(unittest.TestCase):
@@ -53,6 +53,15 @@ class TwoToneWaveformTests(unittest.TestCase):
             [-cfg.tone_separation_hz / 2.0, cfg.tone_separation_hz / 2.0],
             atol=bin_width_hz,
         )
+
+    def test_ideal_line_spectrum_has_exactly_two_equal_tones(self) -> None:
+        cfg = WaveformConfig(sample_rate_hz=200e6, tone_separation_hz=40e6)
+
+        frequencies_hz, normalized_magnitudes = ideal_two_tone_line_spectrum(cfg)
+
+        np.testing.assert_array_equal(frequencies_hz, np.array([-20e6, 20e6]))
+        np.testing.assert_array_equal(normalized_magnitudes, np.ones(2))
+        self.assertEqual(float(np.diff(frequencies_hz)[0]), cfg.tone_separation_hz)
 
 
 class FractionalDelayTests(unittest.TestCase):

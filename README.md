@@ -1,6 +1,6 @@
-# 两节点分布式 AP 相干波束赋形同步 Demo
+# 两节点分布式 AP 时间同步与相干合成 Demo
 
-这是一个纯 Python、复基带的软件仿真，演示 AP0 主节点、AP1 从节点和单天线 RX 之间的时间、频率、相位同步闭环。时间同步参考论文 *Wireless Picosecond Time Synchronization for Distributed Antenna Arrays* 的脉冲双音、双向时间传递、匹配滤波、三点 QLS 和周期偏差 LUT 方法。频率同步使用论文射频自混频参考的等效软件模型；本项目不模拟自混频电路，也不连接 USRP。
+这是一个以**皮秒级双向时间同步**为主目标的纯 Python 复基带仿真。它参考论文 *Wireless Picosecond Time Synchronization for Distributed Antenna Arrays*，实现脉冲双音、有限窗口接收、匹配滤波、三点 QLS、周期偏差 LUT、四时间戳双向时间传递和持续钟差跟踪。同步后的频率估计、RX 到达对齐、导频相位反馈与两 AP 相干合成用于证明时间估计能进入下游闭环；项目不模拟论文自混频电路，也不连接 USRP。
 
 Demo 比较四种状态：
 
@@ -44,20 +44,11 @@ cd "E:\研究生\研究生科研相关\分布式系统波束赋形\distributed_b
 
 ## 输出文件
 
-历史版本的论文图 12 参数对应见 [FINAL_REVIEW.md](FINAL_REVIEW.md)，其中旧版本数值不作为当前验收结果。图 12 三配置软件实验可单独运行：
-
-```powershell
-& "C:\Users\ct183\anaconda3\envs\gpu_torch\python.exe" paper_fig12.py --trials 1000 --output-dir results\final_review
-```
-
-该图采用标准差而非 RMSE；参考时钟和读出抖动为可配置的软件假设，不代表原文硬件实测曲线。参数、原始测量及汇总结果随图保存。
-
-`paper_fig12.py` 特意关闭额外 RX 包络校正，以读出节点时间同步后的原始残差；主 Demo 则开启目标 RX 到达对齐。两者测量对象不同。
-
-默认输出到 `results/fast_demo/` 或 `results/formal/`。`results/` 已加入 `.gitignore`，运行结果不会污染源码提交。
+默认输出到 `results/fast_demo/` 或 `results/formal/`。每次正式交付只保留一个 `results/formal/` 目录，目录内的 `README.md` 先给出时间同步结果，再列出下游相干合成指标。`results/` 已加入 `.gitignore`，运行结果不会污染源码提交。
 
 ```text
 results/<mode>/
+├── README.md                    # 本次运行结论、指标和主次文件导航
 ├── run_config.json              # 本次运行的全部配置
 ├── summary.json                 # 运行环境、状态来源、主要结论和单位化指标
 ├── manifest.json                # 输出文件清单
@@ -81,7 +72,7 @@ results/<mode>/
     └── 10_residual_error_summary.{png,pdf}
 ```
 
-所有图使用白色背景、Times New Roman、明确的物理单位，并同时保存 PNG 和 PDF。内部时间量统一用秒；CSV 和图片按可读量级转换为 ns 或 ps。
+图 01–06 是时间同步主结果，图 07–10 是频率、相位和相干合成的下游验证。图 02 明确画出 −20 MHz 和 +20 MHz 两个理想载频分量；有限 10 µs 脉冲的实际 FFT 会把每条谱线与脉冲门函数频谱卷积，因而具有有限主瓣和旁瓣，不能把它解释成额外载频。所有图同时保存 PNG 和 PDF，内部时间量统一用秒，CSV 和图片按可读量级转换为 ns 或 ps。
 
 ## 算法与符号约定
 

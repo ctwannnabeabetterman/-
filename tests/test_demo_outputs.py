@@ -59,6 +59,9 @@ class DemoSettingsTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             summary = run_demo(settings, directory)
+            result_guide = (Path(directory) / "README.md").read_text(
+                encoding="utf-8"
+            )
 
         clock = summary["clock_tracking"]
         frequency = summary["frequency_sync"]
@@ -79,6 +82,9 @@ class DemoSettingsTests(unittest.TestCase):
             states["full_sync"]["normalized_ideal_loss_db"],
             states["time_frequency"]["normalized_ideal_loss_db"],
         )
+        self.assertIn("时间同步主结果", result_guide)
+        self.assertIn("QLS + LUT", result_guide)
+        self.assertIn("下游相干合成验证", result_guide)
 
     def test_time_varying_channel_is_shared_by_pilot_and_data(self) -> None:
         base = build_demo_settings("fast_demo")

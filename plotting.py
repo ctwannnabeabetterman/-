@@ -11,6 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from config import WaveformConfig
 from experiments import reconstruct_raw_offset_estimate
 from models import (
     BeamformingResult,
@@ -21,6 +22,7 @@ from models import (
     QLSCalibration,
     Waveform,
 )
+from waveforms import ideal_two_tone_line_spectrum
 
 
 _COLORS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00")
@@ -77,21 +79,57 @@ def plot_time_waveform(waveform: Waveform, output_dir: str | Path) -> list[Path]
     return save_figure(fig, output_dir, "01_two_tone_time_waveform")
 
 
-def plot_spectrum(waveform: Waveform, output_dir: str | Path) -> list[Path]:
-    """图 2：归一化双音功率频谱。"""
+def plot_spectrum(
+    waveform_config: WaveformConfig,
+    output_dir: str | Path,
+) -> list[Path]:
+    """图 2：显示双音同步信号的两个理想载频分量。"""
 
     configure_paper_style()
-    fft_length = 8 * waveform.samples.size
-    spectrum = np.fft.fftshift(np.fft.fft(waveform.samples, fft_length))
-    frequency_mhz = np.fft.fftshift(
-        np.fft.fftfreq(fft_length, d=1.0 / waveform.sample_rate_hz)
-    ) / 1e6
-    magnitude_db = 20.0 * np.log10(
-        np.maximum(np.abs(spectrum) / np.max(np.abs(spectrum)), 1e-8)
+    line_frequencies_hz, line_magnitudes = ideal_two_tone_line_spectrum(
+        waveform_config
     )
-    fig, ax = plt.subplots(figsize=(7.2, 3.8))
-    ax.plot(frequency_mhz, magnitude_db, color=_COLORS[0], lw=1.1)
-    ax.set(xlabel="Baseband frequency (MHz)", ylabel="Normalized magnitude (dB)", title="Two-tone spectrum", ylim=(-80, 3))
+    line_frequencies_mhz = line_frequencies_hz / 1e6
+
+    fig, line_ax = plt.subplots(figsize=(7.2, 3.8))
+    line_ax.vlines(
+        line_frequencies_mhz,
+        0.0,
+        line_magnitudes,
+        color=_COLORS[0],
+        lw=2.0,
+    )
+    line_ax.scatter(
+        line_frequencies_mhz,
+        line_magnitudes,
+        color=_COLORS[0],
+        s=32,
+        zorder=3,
+    )
+    for frequency_mhz_value in line_frequencies_mhz:
+        line_ax.annotate(
+            f"{frequency_mhz_value:+.0f} MHz",
+            xy=(frequency_mhz_value, 1.0),
+            xytext=(0, 7),
+            textcoords="offset points",
+            ha="center",
+        )
+    line_ax.set(
+        xlim=(-50.0, 50.0),
+        ylim=(0.0, 1.18),
+        xlabel="Baseband frequency (MHz)",
+        ylabel="Normalized amplitude",
+        title="Two-tone component spectrum: two lines, 40 MHz apart",
+    )
+    line_ax.text(
+        0.5,
+        0.04,
+        "A finite 10 µs burst broadens each line by the pulse-window spectrum.",
+        transform=line_ax.transAxes,
+        ha="center",
+        color="0.3",
+        fontsize=9,
+    )
     return save_figure(fig, output_dir, "02_two_tone_spectrum")
 
 

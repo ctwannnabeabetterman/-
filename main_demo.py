@@ -60,7 +60,7 @@ from plotting import (
     plot_spectrum,
     plot_time_waveform,
 )
-from results_io import write_csv_columns, write_json
+from results_io import write_csv_columns, write_json, write_result_readme
 from waveforms import generate_two_tone
 from joint_sync import run_joint_tracking
 
@@ -626,7 +626,7 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
 
     figure_paths: list[Path] = []
     figure_paths += plot_time_waveform(waveform, figures_dir)
-    figure_paths += plot_spectrum(waveform, figures_dir)
+    figure_paths += plot_spectrum(settings.waveform, figures_dir)
     figure_paths += plot_correlation_qls(
         correlation, raw_delay, settings.waveform.sample_rate_hz, figures_dir
     )
@@ -658,8 +658,10 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         ],
         "summary": "summary.json",
         "configuration": "run_config.json",
+        "guide": "README.md",
     }
     write_json(destination / "manifest.json", manifest)
+    write_result_readme(destination / "README.md", summary)
     return summary
 
 
