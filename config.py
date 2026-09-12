@@ -11,6 +11,7 @@ class WaveformConfig:
     """脉冲双音复基带波形配置；时间单位为秒，频率单位为 Hz。"""
 
     sample_rate_hz: float = 200e6
+    transmit_sample_rate_hz: float = 400e6
     tone_separation_hz: float = 40e6
     pulse_duration_s: float = 10e-6
     rise_fall_s: float = 50e-9
@@ -20,6 +21,7 @@ class WaveformConfig:
     def __post_init__(self) -> None:
         numeric_values = (
             self.sample_rate_hz,
+            self.transmit_sample_rate_hz,
             self.tone_separation_hz,
             self.pulse_duration_s,
             self.rise_fall_s,
@@ -29,8 +31,12 @@ class WaveformConfig:
             raise ValueError("波形配置必须为有限数值")
         if self.sample_rate_hz <= 0.0:
             raise ValueError("sample_rate_hz 必须大于 0")
-        if not 0.0 < self.tone_separation_hz < self.sample_rate_hz:
-            raise ValueError("tone_separation_hz 必须位于 (0, sample_rate_hz) 内")
+        if self.transmit_sample_rate_hz <= 0.0:
+            raise ValueError("transmit_sample_rate_hz 必须大于 0")
+        if not 0.0 < self.tone_separation_hz < min(
+            self.sample_rate_hz, self.transmit_sample_rate_hz
+        ):
+            raise ValueError("tone_separation_hz 必须低于收发采样率")
         if self.pulse_duration_s <= 0.0:
             raise ValueError("pulse_duration_s 必须大于 0")
         if not 0.0 <= self.rise_fall_s <= self.pulse_duration_s / 2.0:
@@ -74,7 +80,6 @@ class TwoWayConfig:
     processing_delay_s: float = 20e-6
     coarse_up_delay_s: float = 50e-9
     coarse_down_delay_s: float = 50e-9
-    gate_half_width_samples: float = 2.5
     receive_pretrigger_s: float = 2e-6
     receive_window_s: float | None = None
     acquisition_threshold: float = 0.45
@@ -85,7 +90,6 @@ class TwoWayConfig:
             self.processing_delay_s,
             self.coarse_up_delay_s,
             self.coarse_down_delay_s,
-            self.gate_half_width_samples,
             self.receive_pretrigger_s,
             self.acquisition_threshold,
         )
@@ -95,8 +99,6 @@ class TwoWayConfig:
             raise ValueError("processing_delay_s 必须为非负数")
         if self.coarse_up_delay_s < 0.0 or self.coarse_down_delay_s < 0.0:
             raise ValueError("粗传播时延必须为非负数")
-        if self.gate_half_width_samples < 1.0:
-            raise ValueError("gate_half_width_samples 至少为 1")
         if self.receive_pretrigger_s < 0 or not 0 < self.acquisition_threshold < 1:
             raise ValueError("接收前置时间须非负，捕获门限须位于 (0, 1)")
         if self.receive_window_s is not None and (
@@ -150,6 +152,8 @@ class FrequencySyncConfig:
     """软件等效频率参考、分段相位估计和跟踪参数。"""
 
     sample_rate_hz: float = 200e6
+    rf_carrier_frequency_hz: float = 4.3e9
+    rf_tone_separation_hz: float = 10e6
     reference_frequency_hz: float = 10e6
     observation_duration_s: float = 2e-3
     segment_duration_s: float = 50e-6
@@ -163,6 +167,8 @@ class FrequencySyncConfig:
     def __post_init__(self) -> None:
         values = (
             self.sample_rate_hz,
+            self.rf_carrier_frequency_hz,
+            self.rf_tone_separation_hz,
             self.reference_frequency_hz,
             self.observation_duration_s,
             self.segment_duration_s,
@@ -179,6 +185,17 @@ class FrequencySyncConfig:
             raise ValueError("sample_rate_hz 必须大于 0")
         if self.reference_frequency_hz <= 0.0:
             raise ValueError("reference_frequency_hz 必须大于 0")
+        if self.rf_carrier_frequency_hz <= 0.0:
+            raise ValueError("rf_carrier_frequency_hz 必须大于 0")
+        if self.rf_tone_separation_hz <= 0.0:
+            raise ValueError("rf_tone_separation_hz 必须大于 0")
+        if not math.isclose(
+            self.reference_frequency_hz,
+            self.rf_tone_separation_hz,
+            rel_tol=1e-12,
+            abs_tol=1e-9,
+        ):
+            raise ValueError("自混频参考频率必须等于两路 RF 音调间隔")
         if abs(self.reference_frequency_hz + self.cfo_hz) >= self.sample_rate_hz / 2.0:
             raise ValueError("参考信号必须位于复基带 Nyquist 区间内")
         if self.sample_clock_offset_fraction <= -1.0:
@@ -315,7 +332,8 @@ class ThreeExperimentConfig:
     snr_db_values: tuple[float, ...] = tuple(float(value) for value in range(6, 37, 3))
     trials_per_snr: int = 100
     seed: int = 120923
-    sync_interval_s: float = 50e-3
+    sync_interval_s: float = 100e-3
+    reply_interval_s: float = 50e-3
     initial_clock_offset_s: float = 100e-9
     cabled_time_delay_s: float = 0.9144 / 2e8
     wireless_time_delay_s: float = 0.90 / 299_792_458.0
@@ -324,7 +342,7 @@ class ThreeExperimentConfig:
     frequency_reference_snr_db: float = 30.0
     frequency_capture_duration_s: float = 40e-6
     beamforming_tone_separation_hz: float = 50e6
-    beamforming_pulse_duration_s: float = 1e-6
+    beamforming_pulse_duration_s: float = 10e-6
     beamforming_carrier_frequency_hz: float = 1.2e9
     receiver_margin_s: float = 2e-6
     data_gate_half_width_samples: float = 2.5
@@ -334,6 +352,7 @@ class ThreeExperimentConfig:
         values = (
             *self.snr_db_values,
             self.sync_interval_s,
+            self.reply_interval_s,
             self.initial_clock_offset_s,
             self.cabled_time_delay_s,
             self.wireless_time_delay_s,
@@ -354,6 +373,7 @@ class ThreeExperimentConfig:
             raise ValueError("三配置实验每个 SNR 至少需要两个试验")
         if min(
             self.sync_interval_s,
+            self.reply_interval_s,
             self.frequency_reference_hz,
             self.frequency_capture_duration_s,
             self.beamforming_tone_separation_hz,

@@ -40,11 +40,18 @@ def raised_cosine_envelope(time_s: NDArray[np.float64], config: WaveformConfig) 
     return envelope
 
 
-def generate_two_tone(config: WaveformConfig) -> Waveform:
-    """生成位于 ``±tone_separation_hz/2`` 的脉冲双音波形。"""
+def generate_two_tone(
+    config: WaveformConfig,
+    *,
+    sample_rate_hz: float | None = None,
+) -> Waveform:
+    """在指定收发栅格生成位于 ``±tone_separation_hz/2`` 的脉冲双音。"""
 
-    sample_count = round(config.pulse_duration_s * config.sample_rate_hz)
-    time_s = np.arange(sample_count, dtype=np.float64) / config.sample_rate_hz
+    rate_hz = config.sample_rate_hz if sample_rate_hz is None else float(sample_rate_hz)
+    if not np.isfinite(rate_hz) or rate_hz <= config.tone_separation_hz:
+        raise ValueError("生成采样率必须为有限正数且高于双音间隔")
+    sample_count = round(config.pulse_duration_s * rate_hz)
+    time_s = np.arange(sample_count, dtype=np.float64) / rate_hz
     envelope = raised_cosine_envelope(time_s, config)
     half_separation_hz = config.tone_separation_hz / 2.0
     samples = envelope * (
@@ -60,13 +67,13 @@ def generate_two_tone(config: WaveformConfig) -> Waveform:
     samples /= np.sqrt(active_power)
 
     average_active_power = float(np.mean(np.abs(samples[active_mask]) ** 2))
-    energy = float(np.sum(np.abs(samples) ** 2) / config.sample_rate_hz)
+    energy = float(np.sum(np.abs(samples) ** 2) / rate_hz)
     return Waveform(
         samples=samples,
         time_s=time_s,
         envelope=envelope,
         active_mask=np.asarray(active_mask, dtype=np.bool_),
-        sample_rate_hz=config.sample_rate_hz,
+        sample_rate_hz=rate_hz,
         average_active_power=average_active_power,
         energy=energy,
     )

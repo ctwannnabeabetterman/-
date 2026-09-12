@@ -102,7 +102,8 @@ def build_demo_settings(mode: str) -> DemoSettings:
     if mode not in {"fast_demo", "formal"}:
         raise ValueError("mode 必须为 fast_demo 或 formal")
     formal = mode == "formal"
-    waveform = WaveformConfig(pulse_duration_s=10e-6 if formal else 2e-6)
+    # fast_demo 只缩减蒙特卡洛次数和 LUT 网格，不改变论文物理波形。
+    waveform = WaveformConfig(pulse_duration_s=10e-6)
     frequency = FrequencySyncConfig(
         observation_duration_s=2e-3 if formal else 1e-3,
         segment_duration_s=50e-6 if formal else 20e-6,
@@ -121,14 +122,16 @@ def build_demo_settings(mode: str) -> DemoSettings:
         mode=mode,
         seed=2023,
         waveform=waveform,
-        two_way=TwoWayConfig(),
+        # Table I 的 50.01 ms synchronization epoch：两个 10 us 脉冲的
+        # 起点相隔 50 ms，因此首脉冲结束后的等待为 49.99 ms。
+        two_way=TwoWayConfig(processing_delay_s=50e-3 - waveform.pulse_duration_s),
         clock_plant=ClockPlantConfig(
             initial_offset_s=100e-9,
             fractional_frequency_offset=0.2e-6,
         ),
         clock_tracking=ClockTrackingConfig(
             rounds=20,
-            sync_interval_s=50e-3,
+            sync_interval_s=100e-3,
             correction_gain=1.0,
             random_walk_std_s_per_sqrt_s=0.5e-12,
         ),
@@ -156,7 +159,10 @@ def build_demo_settings(mode: str) -> DemoSettings:
         monte_carlo=monte_carlo,
         lut_grid_points=2001 if formal else 401,
         frequency_rounds=20 if formal else 12,
-        joint_tracking=JointTrackingConfig(rounds=100 if formal else 40),
+        joint_tracking=JointTrackingConfig(
+            rounds=100 if formal else 40,
+            interval_s=100e-3,
+        ),
         three_experiment=ThreeExperimentConfig(
             trials_per_snr=1000 if formal else 100,
         ),
@@ -610,7 +616,7 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
                 "sample_clock_rate": "slope of reconstructed two-way offset estimates",
                 "oscillator_frequency": "tracked reference phase-slope estimate",
                 "transmit_phase": "quantized RX pilot LS feedback",
-                "transmit_delay": "RX two-burst timestamp difference feedback",
+                "transmit_delay": "RX time-slotted single-pulse arrival-difference feedback",
             },
             "plant_at_data_epoch": {
                 "data_epoch_s": plant_state.data_epoch_s,
@@ -630,8 +636,10 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         },
         "waveform": {
             "sample_rate_msa_s": settings.waveform.sample_rate_hz / 1e6,
+            "transmit_sample_rate_msa_s": settings.waveform.transmit_sample_rate_hz / 1e6,
             "tone_separation_mhz": settings.waveform.tone_separation_hz / 1e6,
             "pulse_duration_us": settings.waveform.pulse_duration_s * 1e6,
+            "rise_fall_ns": settings.waveform.rise_fall_s * 1e9,
             "carrier_frequency_ghz_parameter_only": settings.waveform.carrier_frequency_hz
             / 1e9,
         },
@@ -686,6 +694,16 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
             "residual_fractional_frequency_offset": ap1_clock.effective_rate - 1.0,
         },
         "frequency_sync": {
+            "rf_carrier_ghz": settings.frequency.rf_carrier_frequency_hz / 1e9,
+            "rf_lower_tone_ghz": (
+                settings.frequency.rf_carrier_frequency_hz
+                - 0.5 * settings.frequency.rf_tone_separation_hz
+            ) / 1e9,
+            "rf_upper_tone_ghz": (
+                settings.frequency.rf_carrier_frequency_hz
+                + 0.5 * settings.frequency.rf_tone_separation_hz
+            ) / 1e9,
+            "self_mixed_reference_mhz": settings.frequency.reference_frequency_hz / 1e6,
             "final_true_observed_offset_hz": float(frequency_true[-1]),
             "final_single_estimate_hz": float(frequency_estimate[-1]),
             "final_tracked_estimate_hz": float(frequency_tracked[-1]),
@@ -731,8 +749,8 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         "three_experiments": {
             "statistic": "sample standard deviation, ddof=1",
             "time_snr_definition": "active-region complex AWGN sample SNR",
-            "frequency_reference_model": "continuous 10 MHz reference, two noisy IQ windows separated by the 50 ms synchronization interval",
-            "beamforming_readout": "formula-generated 50 MHz, 1 us pulse through DAC/channel/AWGN/RX-ADC/matched-filter/QLS/LUT",
+            "frequency_reference_model": "4.295/4.305 GHz complex-envelope tones, self-mixed to a continuous 10 MHz reference; two noisy IQ windows separated by the 100 ms resynchronization interval",
+            "beamforming_readout": "formula-generated 50 MHz, 10 us pulse through 400 MSa/s DAC/channel/AWGN/200 MSa/s RX ADC/matched-filter/log-QLS/LUT",
             "profiles": {
                 key: {
                     "label": label,

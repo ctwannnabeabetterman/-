@@ -95,7 +95,7 @@ def write_result_readme(
 
 ## 时间同步主结果
 
-- 波形：{waveform['sample_rate_msa_s']:.0f} MSa/s，两个基带音点位于 ±{waveform['tone_separation_mhz'] / 2:.0f} MHz，间隔 {waveform['tone_separation_mhz']:.0f} MHz，脉冲长度 {waveform['pulse_duration_us']:.0f} µs。
+- 时间传递波形：5.8 GHz 载频参数，400 MSa/s 公式生成、200 MSa/s 接收采样，两个复基带音点位于 ±{waveform['tone_separation_mhz'] / 2:.0f} MHz，间隔 {waveform['tone_separation_mhz']:.0f} MHz，单脉冲长度 {waveform['pulse_duration_us']:.0f} µs，升降沿 {waveform['rise_fall_ns']:.0f} ns。
 - QLS/LUT 独立验证：留出 {lut['validation_points']} 个未参与 LUT 构建的分数时延；原始 QLS RMSE {lut['raw_rmse_ps']:.3f} ps，校正后 {lut['corrected_rmse_ps']:.3f} ps，最大绝对残差 {lut['corrected_max_abs_bias_ps']:.3f} ps。
 - 单次时延：真值 {delay['true_delay_ns']:.6f} ns，QLS + LUT 估计 {delay['lut_corrected_delay_ns']:.6f} ns，误差 {delay['corrected_error_ps']:.3f} ps。
 - {high_snr['snr_db']:.0f} dB Monte Carlo：QLS + LUT 时延 RMSE {high_snr['qls_lut_rmse_ps']:.3f} ps，CRLB 标准差 {high_snr['crlb_std_ps']:.3f} ps，完整双向钟差 RMSE {high_snr['clock_offset_rmse_ps']:.3f} ps。
@@ -105,11 +105,11 @@ def write_result_readme(
 
 ## 论文三种实验配置的等效软件链路
 
-每个统计点都依次运行接收 IQ、匹配滤波、整数峰、QLS、LUT、四时间戳双向校时，再用公式生成的 50 MHz、1 µs 脉冲经过 DAC 网格、信道、AWGN、RX ADC 和同一到达时刻估计器。全无线频率配置另外从连续 10 MHz 参考上相隔 50 ms 的两个带噪 IQ 窗口估计相位差和采样钟速率。以下为最高 SNR 点：
+每个统计点都依次运行接收 IQ、匹配滤波、整数峰、对数幅度 QLS、LUT、四时间戳双向校时，再用公式生成的 50 MHz、10 µs 脉冲经过 400 MSa/s DAC 网格、信道、AWGN、200 MSa/s RX ADC 和同一到达时刻估计器。全无线频率配置从 4.295/4.305 GHz 双音的复包络自混频得到连续 10 MHz 参考，再用相隔 100 ms 的两个带噪 IQ 窗口估计采样钟速率。以下为最高 SNR 点：
 
 {profile_lines}
 
-图 11 和 `three_experiment_summary.csv` 给出完整 6:3:36 dB 曲线；`three_experiment_samples.csv` 保存每个 trial 的原始结果。三种配置是论文拓扑的复基带等效模型，其中“cabled”与“wireless”选择传播时延和频率参考来源，不包含线缆/RF 前端群时延、无线多径和自混频硬件。
+图 `12_paper_figure12_three_experiment_precision` 和 `three_experiment_summary.csv` 给出完整 6:3:36 dB 曲线；`three_experiment_samples.csv` 保存每个 trial 的原始结果。三种配置是论文拓扑的复基带等效模型，其中“cabled”与“wireless”选择传播时延和频率参考来源，不包含线缆/RF 前端群时延、无线多径、实物混频器相噪和杂散。
 
 ## 下游相干合成验证
 

@@ -45,7 +45,8 @@ class QLSTests(unittest.TestCase):
     def test_qls_finds_exact_peak_of_three_point_parabola(self) -> None:
         lags = np.arange(-2, 3, dtype=np.int64)
         true_fraction = 0.25
-        magnitude = 4.0 - (lags.astype(np.float64) - true_fraction) ** 2
+        log_magnitude_db = 4.0 - (lags.astype(np.float64) - true_fraction) ** 2
+        magnitude = 10.0 ** (log_magnitude_db / 20.0)
         correlation = CorrelationResult(
             values=magnitude.astype(np.complex128),
             magnitude=magnitude,
@@ -60,6 +61,35 @@ class QLSTests(unittest.TestCase):
         self.assertAlmostEqual(estimate.delay_s, true_fraction / 200e6, places=18)
         self.assertTrue(estimate.qls_valid)
         self.assertFalse(estimate.boundary_hit)
+
+    def test_paper_qls_uses_log_magnitude_and_reproduces_seventy_three_ps_bias(self) -> None:
+        config = WaveformConfig()
+        waveform = generate_two_tone(config)
+        fractions = np.linspace(-0.5, 0.5, 401, endpoint=False)
+        errors_ps = []
+        for fraction in fractions:
+            received = apply_fractional_delay(
+                np.pad(waveform.samples, (0, 64)),
+                delay_s=(24.0 + float(fraction)) / config.sample_rate_hz,
+                sample_rate_hz=config.sample_rate_hz,
+            )
+            estimate = estimate_delay(
+                fft_matched_filter(received, waveform.samples),
+                config.sample_rate_hz,
+                DelaySearchGate(
+                    center_s=24.0 / config.sample_rate_hz,
+                    half_width_s=2.5 / config.sample_rate_hz,
+                ),
+            )
+            estimated_fraction = (
+                estimate.integer_lag_samples - 24 + estimate.fractional_offset_samples
+            )
+            error_samples = (estimated_fraction - fraction + 0.5) % 1.0 - 0.5
+            errors_ps.append(error_samples / config.sample_rate_hz * 1e12)
+
+        peak_bias_ps = float(np.max(np.abs(errors_ps)))
+        self.assertGreater(peak_bias_ps, 70.0)
+        self.assertLess(peak_bias_ps, 77.0)
 
     def test_search_gate_rejects_stronger_echo_outside_expected_window(self) -> None:
         rng = np.random.default_rng(33)

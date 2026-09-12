@@ -82,8 +82,40 @@ def run_clock_tracking(
         residual_before_s[round_index] = (ap1_clock.read_time(current_true_time_s)
                                         - ap0_clock.read_time(current_true_time_s))
         estimate = estimate_two_way(observation)
-        correction = tracking_config.correction_gain * estimate.clock_correction_s
         estimated_offset_s[round_index] = estimate.ap1_offset_estimate_s
+        reconstructed_raw = (
+            estimated_offset_s[: round_index + 1]
+            - np.concatenate(
+                (
+                    np.zeros(1, dtype=np.float64),
+                    np.cumsum(applied_correction_s[:round_index]),
+                )
+            )
+        )
+        rate_estimate = 0.0
+        if round_index >= 1:
+            epochs = reference_epoch_s[: round_index + 1]
+            centered_epochs = epochs - float(np.mean(epochs))
+            denominator = float(np.sum(centered_epochs**2))
+            if denominator > np.finfo(np.float64).tiny:
+                centered_offsets = reconstructed_raw - float(np.mean(reconstructed_raw))
+                rate_estimate = float(
+                    np.sum(centered_epochs * centered_offsets) / denominator
+                )
+        # 四时间戳给出回复等待中点附近的钟差。控制命令在回复脉冲完整
+        # 接收后生效，因此用协议可见的 AP0 时间戳与时延估计把钟差外推
+        # 到控制历元；不读取 epoch_true_s 或 plant 的真实频差。
+        observable_control_epoch_s = (
+            observation.t_tx0_s
+            + max(0.0, estimate.symmetric_propagation_delay_s)
+            + waveform_config.pulse_duration_s
+        )
+        reference_to_control_s = (
+            observable_control_epoch_s - reference_epoch_s[round_index]
+        )
+        correction = tracking_config.correction_gain * (
+            estimate.clock_correction_s - rate_estimate * reference_to_control_s
+        )
         applied_correction_s[round_index] = correction
         ap1_clock.apply_time_correction(correction)
         residual_after_s[round_index] = (

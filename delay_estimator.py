@@ -62,7 +62,7 @@ def estimate_delay(
     sample_rate_hz: float,
     gate: DelaySearchGate | None = None,
 ) -> DelayEstimate:
-    """在可选粗搜索门内寻找峰值并进行三点 QLS 插值。"""
+    """在线性幅度上找峰，并按论文 Fig. 4 在对数幅度上做三点 QLS。"""
 
     if not math.isfinite(sample_rate_hz) or sample_rate_hz <= 0.0:
         raise ValueError("sample_rate_hz 必须为正有限数")
@@ -98,9 +98,14 @@ def estimate_delay(
     qls_valid = False
     clipped = False
     if not boundary_hit:
-        left = float(magnitude[peak_index - 1])
-        center = float(magnitude[peak_index])
-        right = float(magnitude[peak_index + 1])
+        # 论文给出的约 73 ps 峰值偏差对应对数幅度（dB）上的抛物线拟合；
+        # 若直接在线性幅度拟合，相同 40 MHz/200 MSa/s 参数只有约 32 ps。
+        # 峰值检测仍在线性幅度完成，避免对数改变排序。
+        floor = max(float(magnitude[peak_index]) * 1e-15, np.finfo(np.float64).tiny)
+        local_db = 20.0 * np.log10(
+            np.maximum(magnitude[peak_index - 1 : peak_index + 2], floor)
+        )
+        left, center, right = (float(value) for value in local_db)
         denominator = left - 2.0 * center + right
         local_scale = max(abs(left), abs(center), abs(right), np.finfo(np.float64).tiny)
         curvature_threshold = 64.0 * np.finfo(np.float64).eps * local_scale

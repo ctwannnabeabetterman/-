@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 import numpy as np
 
@@ -69,6 +70,25 @@ class ClockTrackingTests(unittest.TestCase):
             abs(float(np.median(-result.applied_correction_s[2:])) - expected_drift_per_round_s),
             20e-12,
         )
+
+    def test_long_paper_exchange_extrapolates_offset_to_control_epoch(self) -> None:
+        exchange = replace(self.exchange, processing_delay_s=50e-3 - 1e-6)
+        result = run_clock_tracking(
+            waveform_config=self.waveform,
+            two_way_config=exchange,
+            tracking_config=ClockTrackingConfig(rounds=6, sync_interval_s=100e-3),
+            ap0_clock=LocalClock(),
+            ap1_clock=LocalClock(
+                offset_s=100e-9,
+                fractional_frequency_offset=0.2e-6,
+            ),
+            up_link=self.link,
+            down_link=self.link,
+            calibration=self.calibration,
+            rng=np.random.default_rng(510),
+        )
+
+        self.assertLess(float(np.max(np.abs(result.residual_after_s[2:]))), 20e-12)
 
     def test_random_walk_is_reproducible_for_fixed_seed(self) -> None:
         first = self._run(interval_s=50e-3, random_walk=50e-12, seed=52)

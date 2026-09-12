@@ -12,24 +12,56 @@ from config import FrequencySyncConfig
 from models import FrequencyEstimate, FrequencyReferenceObservation
 
 
+def frequency_transfer_rf_tones_hz(
+    config: FrequencySyncConfig,
+) -> tuple[float, float]:
+    """返回论文频率传递的两路 RF 频率；它们只作为物理元数据。
+
+    纯软件链在复包络上运算，不会错误地用 200 MSa/s 直接采样 4.3 GHz。
+    """
+
+    half_separation_hz = 0.5 * config.rf_tone_separation_hz
+    return (
+        config.rf_carrier_frequency_hz - half_separation_hz,
+        config.rf_carrier_frequency_hz + half_separation_hz,
+    )
+
+
+def _self_mixed_clean_reference(
+    config: FrequencySyncConfig,
+    true_sample_time_s: NDArray[np.float64],
+) -> NDArray[np.complex128]:
+    """由两路 RF 音调的复包络交叉乘积产生差频参考。
+
+    下、上音调位于载频两侧；共同的 4.3 GHz 项在自混频时抵消，保留
+    两音调间隔。``cfo_hz`` 表示差频参考相对名义 10 MHz 的物理偏差。
+    """
+
+    physical_separation_hz = config.rf_tone_separation_hz + config.cfo_hz
+    lower_offset_hz = -0.5 * physical_separation_hz
+    upper_offset_hz = +0.5 * physical_separation_hz
+    component_amplitude = np.sqrt(config.amplitude)
+    half_phase = 0.5 * config.initial_phase_rad
+    lower_envelope = component_amplitude * np.exp(
+        1j * (2.0 * np.pi * lower_offset_hz * true_sample_time_s - half_phase)
+    )
+    upper_envelope = component_amplitude * np.exp(
+        1j * (2.0 * np.pi * upper_offset_hz * true_sample_time_s + half_phase)
+    )
+    return np.asarray(upper_envelope * np.conj(lower_envelope), dtype=np.complex128)
+
+
 def simulate_frequency_reference(
     config: FrequencySyncConfig,
     rng: np.random.Generator,
 ) -> FrequencyReferenceObservation:
-    """模拟 AP1 以偏差采样时钟接收 AP0 名义复基带参考。"""
+    """模拟 4.295/4.305 GHz 无线双音自混频后的 10 MHz AP1 观测。"""
 
     sample_count = round(config.observation_duration_s * config.sample_rate_hz)
     nominal_time_s = np.arange(sample_count, dtype=np.float64) / config.sample_rate_hz
     true_sample_time_s = nominal_time_s / (1.0 + config.sample_clock_offset_fraction)
-    physical_frequency_hz = config.reference_frequency_hz + config.cfo_hz
-    clean = config.amplitude * np.exp(
-        1j
-        * (
-            2.0 * np.pi * physical_frequency_hz * true_sample_time_s
-            + config.initial_phase_rad
-        )
-    )
-    clean = np.asarray(clean, dtype=np.complex128)
+    physical_frequency_hz = config.rf_tone_separation_hz + config.cfo_hz
+    clean = _self_mixed_clean_reference(config, true_sample_time_s)
     noisy = add_awgn(
         clean,
         snr_db=config.snr_db,

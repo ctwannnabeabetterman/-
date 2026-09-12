@@ -10,6 +10,7 @@ from config import FrequencySyncConfig
 from frequency_sync import (
     compensate_frequency,
     estimate_frequency_offset,
+    frequency_transfer_rf_tones_hz,
     simulate_frequency_reference,
     update_frequency_tracker,
 )
@@ -26,6 +27,7 @@ class FrequencyEstimationTests(unittest.TestCase):
     ) -> FrequencySyncConfig:
         return FrequencySyncConfig(
             sample_rate_hz=2e6,
+            rf_tone_separation_hz=100e3,
             reference_frequency_hz=100e3,
             observation_duration_s=20e-3,
             segment_duration_s=0.5e-3,
@@ -44,6 +46,21 @@ class FrequencyEstimationTests(unittest.TestCase):
 
         self.assertLess(abs(estimate.frequency_offset_hz - 250.0), 0.2)
         self.assertGreater(estimate.segment_times_s.size, 10)
+
+    def test_table_i_rf_tones_self_mix_to_ten_megahertz(self) -> None:
+        config = FrequencySyncConfig(cfo_hz=0.0, snr_db=120.0)
+        lower_hz, upper_hz = frequency_transfer_rf_tones_hz(config)
+
+        self.assertEqual(lower_hz, 4.295e9)
+        self.assertEqual(upper_hz, 4.305e9)
+        self.assertEqual(upper_hz - lower_hz, config.reference_frequency_hz)
+
+        observation = simulate_frequency_reference(config, np.random.default_rng(600))
+        phase_step = np.angle(
+            np.vdot(observation.clean_samples[:-1], observation.clean_samples[1:])
+        )
+        measured_hz = phase_step * config.sample_rate_hz / (2.0 * np.pi)
+        self.assertLess(abs(measured_hz - config.reference_frequency_hz), 1e-6)
 
     def test_frequency_estimate_is_independent_of_initial_phase(self) -> None:
         estimates = []

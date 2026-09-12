@@ -154,7 +154,8 @@ def _corrected_pulse_arrival_s(
 
 
 def _measure_beamforming_interarrival(
-    waveform: Waveform,
+    receive_waveform: Waveform,
+    transmit_waveform: Waveform,
     calibration: QLSCalibration,
     ap0_clock: LocalClock,
     ap1_clock: LocalClock,
@@ -165,25 +166,28 @@ def _measure_beamforming_interarrival(
 ) -> float:
     """两 AP 同一计划时刻发射，理想 RX ADC 分别测量脉冲到达差。"""
 
-    fs = waveform.sample_rate_hz
+    rx_fs = receive_waveform.sample_rate_hz
+    tx_fs = transmit_waveform.sample_rate_hz
     rx_start_s = transmit_local_s - config.receiver_margin_s
     capture_count = int(
         np.ceil(
             (config.beamforming_pulse_duration_s + 2.0 * config.receiver_margin_s)
-            * fs
+            * rx_fs
         )
     )
     expected_delay_s = config.receiver_margin_s
     arrivals: list[float] = []
     for clock in (ap0_clock, ap1_clock):
         tx_true_s = clock.true_time_for_reading(transmit_local_s)
-        start_source_sample = (rx_start_s - tx_true_s) * fs * clock.effective_rate
+        start_source_sample = (
+            (rx_start_s - tx_true_s) * tx_fs * clock.effective_rate
+        )
         capture = simulate_capture(
-            waveform.samples,
-            fs,
+            transmit_waveform.samples,
+            rx_fs,
             start_local_s=rx_start_s,
             start_source_sample=start_source_sample,
-            sample_step=clock.effective_rate,
+            sample_step=tx_fs * clock.effective_rate / rx_fs,
             count=capture_count,
             amplitude=1.0 + 0.0j,
             snr_db=snr_db,
@@ -193,7 +197,7 @@ def _measure_beamforming_interarrival(
             _corrected_pulse_arrival_s(
                 capture.samples,
                 capture.start_local_s,
-                waveform,
+                receive_waveform,
                 calibration,
                 expected_delay_s,
                 config.data_gate_half_width_samples,
@@ -228,6 +232,10 @@ def run_three_experiment_suite(
         carrier_frequency_hz=config.beamforming_carrier_frequency_hz,
     )
     beamforming_waveform = generate_two_tone(beamforming_config)
+    beamforming_tx_waveform = generate_two_tone(
+        beamforming_config,
+        sample_rate_hz=beamforming_config.transmit_sample_rate_hz,
+    )
     data_lut = beamforming_calibration or build_qls_lut(
         beamforming_config, grid_points=calibration.grid_points
     )
@@ -282,7 +290,9 @@ def run_three_experiment_suite(
                 )
                 schedule = TwoWayConfig(
                     tx1_local_time_s=1e-3,
-                    processing_delay_s=20e-6,
+                    processing_delay_s=(
+                        config.reply_interval_s - waveform_config.pulse_duration_s
+                    ),
                     coarse_up_delay_s=profile.propagation_delay_s,
                     coarse_down_delay_s=profile.propagation_delay_s,
                 )
@@ -302,6 +312,7 @@ def run_three_experiment_suite(
                     ap1_clock.apply_time_correction(estimate.clock_correction_s)
                     beamforming_interarrival_s = _measure_beamforming_interarrival(
                         beamforming_waveform,
+                        beamforming_tx_waveform,
                         data_lut,
                         ap0_clock,
                         ap1_clock,

@@ -32,7 +32,6 @@ class TwoWayTimeTransferTests(unittest.TestCase):
             processing_delay_s=processing_delay_s,
             coarse_up_delay_s=50e-9,
             coarse_down_delay_s=50e-9,
-            gate_half_width_samples=2.5,
         )
         observation = simulate_two_way_exchange(
             waveform_config=self.waveform_config,

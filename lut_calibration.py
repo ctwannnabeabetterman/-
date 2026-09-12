@@ -11,14 +11,14 @@ from typing import overload
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from channel import apply_fractional_delay
 from config import WaveformConfig
 from delay_estimator import DelaySearchGate, estimate_delay, fft_matched_filter
 from models import QLSCalibration, QLSValidation
+from sampling import sample_iq
 from waveforms import generate_two_tone
 
 
-_ALGORITHM_VERSION = "qls-lut-v1"
+_ALGORITHM_VERSION = "qls-log-magnitude-lut-v2"
 
 
 @overload
@@ -88,23 +88,28 @@ def _estimate_fractional_grid(
     config: WaveformConfig,
     true_fraction_samples: NDArray[np.float64],
 ) -> NDArray[np.float64]:
-    """经分数时延信道、匹配滤波和 QLS 估计一组真实分数位置。"""
+    """在论文 400 MSa/s DAC 到 200 MSa/s ADC 链上扫描分数样点。"""
 
-    waveform = generate_two_tone(config)
+    receive_waveform = generate_two_tone(config)
+    transmit_waveform = generate_two_tone(
+        config, sample_rate_hz=config.transmit_sample_rate_hz
+    )
     nominal_integer = 24
-    tx_buffer = np.pad(waveform.samples, (0, 64))
+    rate_ratio = config.transmit_sample_rate_hz / config.sample_rate_hz
+    receive_count = receive_waveform.samples.size + nominal_integer + 64
     gate = DelaySearchGate(
         center_s=nominal_integer / config.sample_rate_hz,
         half_width_s=2.5 / config.sample_rate_hz,
     )
     raw_fraction = np.empty(true_fraction_samples.shape, dtype=np.float64)
     for index, fraction in enumerate(true_fraction_samples):
-        received = apply_fractional_delay(
-            tx_buffer,
-            delay_s=(nominal_integer + float(fraction)) / config.sample_rate_hz,
-            sample_rate_hz=config.sample_rate_hz,
+        received = sample_iq(
+            transmit_waveform.samples,
+            start_sample=-(nominal_integer + float(fraction)) * rate_ratio,
+            step=rate_ratio,
+            count=receive_count,
         )
-        correlation = fft_matched_filter(received, waveform.samples)
+        correlation = fft_matched_filter(received, receive_waveform.samples)
         estimate = estimate_delay(correlation, config.sample_rate_hz, gate)
         if not estimate.qls_valid:
             raise RuntimeError(f"分数时延网格 {index} 的 QLS 插值无效")

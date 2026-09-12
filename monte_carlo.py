@@ -94,7 +94,6 @@ def run_delay_monte_carlo(
                 / waveform_config.sample_rate_hz,
                 coarse_down_delay_s=config.nominal_delay_samples
                 / waveform_config.sample_rate_hz,
-                gate_half_width_samples=config.gate_half_width_samples,
             )
             try:
                 observation = simulate_two_way_exchange(

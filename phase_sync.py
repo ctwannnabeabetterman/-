@@ -12,9 +12,10 @@ from channel import add_awgn, apply_fractional_delay
 from config import BeamformingConfig, PhaseFeedbackConfig, WaveformConfig
 from models import ChannelFeedbackResult
 from oscillator_model import LocalOscillator
-from acquisition import measure_capture, simulate_capture, sync_burst
+from acquisition import measure_capture, simulate_capture
 from lut_calibration import build_qls_lut
 from models import QLSCalibration
+from waveforms import generate_two_tone
 
 
 @lru_cache(maxsize=8)
@@ -30,20 +31,24 @@ def estimate_rx_arrival_difference(
 ) -> float:
     """分时探测两路到达时间，以 RX 本地时间戳之差生成反馈。"""
     lut = calibration if calibration is not None else _alignment_lut(waveform_config)
-    burst, _, prefix = sync_burst(waveform_config)
-    fs = waveform_config.sample_rate_hz
+    rx_fs = waveform_config.sample_rate_hz
+    tx_fs = waveform_config.transmit_sample_rate_hz
+    pulse = generate_two_tone(
+        waveform_config, sample_rate_hz=tx_fs
+    ).samples
     margin = feedback_config.alignment_window_margin_s
-    count = len(burst) + int(np.ceil(2*margin*fs))
+    count = int(np.ceil((waveform_config.pulse_duration_s + 2 * margin) * rx_fs))
     delays = (beamforming_config.ap0_propagation_delay_s,
               beamforming_config.ap1_propagation_delay_s-residual_clock_offset_s)
     amplitudes = (beamforming_config.ap0_amplitude, beamforming_config.ap1_amplitude)
     observations = []
     for delay, amplitude in zip(delays, amplitudes):
-        capture = simulate_capture(burst, fs, start_local_s=-margin,
-            start_source_sample=(-margin-delay)*fs, sample_step=1., count=count,
+        capture = simulate_capture(pulse, rx_fs, start_local_s=-margin,
+            start_source_sample=(-margin-delay)*tx_fs,
+            sample_step=tx_fs/rx_fs, count=count,
             amplitude=complex(amplitude), snr_db=feedback_config.snr_db, rng=rng)
         measurement = measure_capture(capture, waveform_config, lut)
-        observations.append(capture.start_local_s + measurement.corrected_delay_s-prefix/fs)
+        observations.append(capture.start_local_s + measurement.corrected_delay_s)
     return float(observations[1]-observations[0])
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 import numpy as np
 
-from acquisition import AcquisitionError, sync_burst
+from acquisition import AcquisitionError
 from beamforming import combine_two_ap
 from clock_model import LocalClock
 from config import (BeamformingConfig, ChannelConfig, ClockPlantConfig, FrequencySyncConfig,
@@ -36,8 +36,10 @@ def run_joint_tracking(waveform_config: WaveformConfig, calibration: QLSCalibrat
     oscillator = LocalOscillator(oscillator_config.frequency_offset_hz, oscillator_config.initial_phase_rad)
     link = ChannelConfig(propagation_delay_s=50e-9, snr_db=36.)
     waveform = generate_two_tone(waveform_config)
-    burst, _, _ = sync_burst(waveform_config)
-    probe_time = 2*(len(burst)/waveform_config.sample_rate_hz + 2*phase_config.alignment_window_margin_s)
+    probe_time = 2 * (
+        waveform_config.pulse_duration_s
+        + 2 * phase_config.alignment_window_margin_s
+    )
     reserved = (2*waveform_config.pulse_duration_s + schedule.processing_delay_s
                 + frequency_config.observation_duration_s + probe_time
                 + 2*phase_config.feedback_delay_s + phase_config.pilot_symbols/waveform_config.sample_rate_hz)
@@ -130,7 +132,7 @@ def run_joint_tracking(waveform_config: WaveformConfig, calibration: QLSCalibrat
             if abs(arrival_error) >= waveform_config.pulse_duration_s-1/waveform_config.sample_rate_hz:
                 delays_ps.append(abs(arrival_error)*1e12)
                 clock_ps.append(abs(residual_clock)*1e12)
-                # Disjoint bursts have no coherent cross term; phase is undefined.
+                # Disjoint pulses have no coherent cross term; phase is undefined.
                 phases.append(np.pi)
                 gains.append(0.)
                 continue

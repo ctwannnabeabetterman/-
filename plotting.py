@@ -148,9 +148,13 @@ def plot_correlation_qls(
     upper = min(correlation.magnitude.size, peak + 4)
     x_samples = correlation.lags_samples[lower:upper].astype(np.float64)
     scale = float(correlation.magnitude[peak])
-    y = correlation.magnitude[lower:upper] / scale
+    y = 20.0 * np.log10(
+        np.maximum(correlation.magnitude[lower:upper] / scale, 1e-15)
+    )
     local_x = correlation.lags_samples[peak - 1 : peak + 2].astype(np.float64)
-    local_y = correlation.magnitude[peak - 1 : peak + 2] / scale
+    local_y = 20.0 * np.log10(
+        np.maximum(correlation.magnitude[peak - 1 : peak + 2] / scale, 1e-15)
+    )
     coefficients = np.polyfit(local_x, local_y, 2)
     dense_x = np.linspace(local_x[0], local_x[-1], 300)
 
@@ -161,8 +165,8 @@ def plot_correlation_qls(
     ax.axvline(qls_samples, color=_COLORS[2], ls="--", label=f"QLS = {qls_samples:.4f} samples")
     ax.set(
         xlabel=f"Delay lag (samples at {sample_rate_hz / 1e6:.0f} MSa/s)",
-        ylabel="Normalized correlation magnitude",
-        title="Matched-filter peak and local QLS fit",
+        ylabel="Matched-filter magnitude (dB, peak normalized)",
+        title="Matched-filter peak and log-magnitude QLS fit",
     )
     ax.legend(loc="best")
     return save_figure(fig, output_dir, "03_matched_filter_qls")
@@ -346,7 +350,7 @@ def plot_three_experiment_precision(
     result: ThreeExperimentResult,
     output_dir: str | Path,
 ) -> list[Path]:
-    """图 11：三种论文配置的完整链路时间与脉冲到达精度。"""
+    """论文 Fig. 12 风格：三种配置的时间与脉冲到达精度。"""
 
     configure_paper_style()
     fig, axes = plt.subplots(
@@ -395,6 +399,6 @@ def plot_three_experiment_precision(
     return save_figure(
         fig,
         output_dir,
-        "11_three_experiment_precision",
+        "12_paper_figure12_three_experiment_precision",
         tight_layout=False,
     )
