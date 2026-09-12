@@ -1,4 +1,4 @@
-"""论文风格的十组 Demo 图；每组同时保存 PNG 和 PDF。"""
+"""论文风格的十一组 Demo 图；每组同时保存 PNG 和 PDF。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from config import WaveformConfig
 from experiments import reconstruct_raw_offset_estimate
 from models import (
     BeamformingResult,
@@ -20,9 +19,10 @@ from models import (
     DelayEstimate,
     MonteCarloResult,
     QLSCalibration,
+    QLSValidation,
+    ThreeExperimentResult,
     Waveform,
 )
-from waveforms import ideal_two_tone_line_spectrum
 
 
 _COLORS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00")
@@ -51,12 +51,19 @@ def configure_paper_style() -> None:
     )
 
 
-def save_figure(fig: plt.Figure, output_dir: str | Path, stem: str) -> list[Path]:
+def save_figure(
+    fig: plt.Figure,
+    output_dir: str | Path,
+    stem: str,
+    *,
+    tight_layout: bool = True,
+) -> list[Path]:
     """紧凑布局后把图保存为 180 dpi PNG 和矢量 PDF。"""
 
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
+    if tight_layout:
+        fig.tight_layout()
     paths = [directory / f"{stem}.png", directory / f"{stem}.pdf"]
     fig.savefig(paths[0], dpi=180, bbox_inches="tight")
     fig.savefig(paths[1], bbox_inches="tight")
@@ -65,71 +72,65 @@ def save_figure(fig: plt.Figure, output_dir: str | Path, stem: str) -> list[Path
 
 
 def plot_time_waveform(waveform: Waveform, output_dir: str | Path) -> list[Path]:
-    """图 1：脉冲双音的时域实部、虚部和包络。"""
+    """图 1：公式生成的完整脉冲包络与双音拍频局部波形。"""
 
     configure_paper_style()
-    fig, ax = plt.subplots(figsize=(7.2, 3.8))
+    fig, (envelope_ax, waveform_ax) = plt.subplots(2, 1, figsize=(7.2, 5.3))
     time_us = waveform.time_s * 1e6
-    ax.plot(time_us, waveform.samples.real, color=_COLORS[0], lw=1.0, label="In-phase")
-    ax.plot(time_us, waveform.samples.imag, color=_COLORS[1], lw=1.0, label="Quadrature")
     envelope_scale = float(np.max(np.abs(waveform.samples)))
-    ax.plot(time_us, waveform.envelope * envelope_scale, "k--", lw=1.1, label="Envelope")
-    ax.set(xlabel="Time (µs)", ylabel="Normalized amplitude", title="Pulsed two-tone synchronization waveform")
-    ax.legend(loc="upper right", ncol=3)
+    envelope_ax.plot(time_us, np.abs(waveform.samples), color=_COLORS[0], lw=0.9, label="|s(t)|")
+    envelope_ax.plot(time_us, waveform.envelope * envelope_scale, "k--", lw=1.0, label="Raised-cosine window")
+    envelope_ax.set(ylabel="Magnitude", title="Formula-generated 40 MHz pulsed two-tone")
+    envelope_ax.legend(loc="upper right", ncol=2)
+
+    zoom_duration_us = min(0.6, float(time_us[-1]))
+    zoom = time_us <= zoom_duration_us
+    waveform_ax.plot(time_us[zoom], waveform.samples.real[zoom], color=_COLORS[0], lw=0.9)
+    waveform_ax.axhline(0.0, color="black", lw=0.6)
+    waveform_ax.set(
+        xlabel="Time (µs)",
+        ylabel="In-phase amplitude",
+        title=f"First {zoom_duration_us:.1f} µs: beating of −20 MHz and +20 MHz",
+    )
     return save_figure(fig, output_dir, "01_two_tone_time_waveform")
 
 
 def plot_spectrum(
-    waveform_config: WaveformConfig,
+    waveform: Waveform,
+    received_samples: Sequence[complex] | np.ndarray,
     output_dir: str | Path,
 ) -> list[Path]:
-    """图 2：显示双音同步信号的两个理想载频分量。"""
+    """图 2：由公式 TX 样点和链路 RX 样点实际计算双音频谱。"""
 
     configure_paper_style()
-    line_frequencies_hz, line_magnitudes = ideal_two_tone_line_spectrum(
-        waveform_config
-    )
-    line_frequencies_mhz = line_frequencies_hz / 1e6
+    rx = np.asarray(received_samples, dtype=np.complex128)
+    if rx.ndim != 1 or rx.size == 0 or not np.all(np.isfinite(rx)):
+        raise ValueError("received_samples 必须为非空一维有限复数组")
 
-    fig, line_ax = plt.subplots(figsize=(7.2, 3.8))
-    line_ax.vlines(
-        line_frequencies_mhz,
-        0.0,
-        line_magnitudes,
-        color=_COLORS[0],
-        lw=2.0,
-    )
-    line_ax.scatter(
-        line_frequencies_mhz,
-        line_magnitudes,
-        color=_COLORS[0],
-        s=32,
-        zorder=3,
-    )
-    for frequency_mhz_value in line_frequencies_mhz:
-        line_ax.annotate(
-            f"{frequency_mhz_value:+.0f} MHz",
-            xy=(frequency_mhz_value, 1.0),
-            xytext=(0, 7),
-            textcoords="offset points",
-            ha="center",
+    def spectrum_db(samples: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        spectrum = np.fft.fftshift(np.fft.fft(samples))
+        frequency_mhz = np.fft.fftshift(
+            np.fft.fftfreq(samples.size, d=1.0 / waveform.sample_rate_hz)
+        ) / 1e6
+        magnitude = np.abs(spectrum)
+        magnitude_db = 20.0 * np.log10(
+            np.maximum(magnitude / np.max(magnitude), 1e-6)
         )
-    line_ax.set(
+        return frequency_mhz, magnitude_db
+
+    tx_frequency_mhz, tx_db = spectrum_db(waveform.samples)
+    rx_frequency_mhz, rx_db = spectrum_db(rx)
+    fig, ax = plt.subplots(figsize=(7.2, 3.9))
+    ax.plot(tx_frequency_mhz, tx_db, color=_COLORS[0], lw=0.9, label="Formula TX pulse")
+    ax.plot(rx_frequency_mhz, rx_db, color=_COLORS[1], lw=0.8, alpha=0.75, label="RX after delay + AWGN")
+    ax.set(
         xlim=(-50.0, 50.0),
-        ylim=(0.0, 1.18),
+        ylim=(-105.0, 3.0),
         xlabel="Baseband frequency (MHz)",
-        ylabel="Normalized amplitude",
-        title="Two-tone component spectrum: two lines, 40 MHz apart",
+        ylabel="Normalized magnitude (dB)",
+        title="FFT calculated from transmitted and received IQ samples",
     )
-    line_ax.text(
-        0.5,
-        0.04,
-        "A finite 10 µs burst broadens each line by the pulse-window spectrum.",
-        transform=line_ax.transAxes,
-        ha="center",
-        color="0.3",
-        fontsize=9,
-    )
+    ax.legend(loc="lower center", ncol=2)
     return save_figure(fig, output_dir, "02_two_tone_spectrum")
 
 
@@ -169,23 +170,51 @@ def plot_correlation_qls(
 
 def plot_lut_bias(
     calibration: QLSCalibration,
+    validation: QLSValidation,
     sample_rate_hz: float,
     output_dir: str | Path,
 ) -> list[Path]:
-    """图 4：QLS 周期系统偏差在 LUT 校正前后的变化。"""
+    """图 4：训练 LUT 与独立分数时延验证集上的校正结果。"""
 
     configure_paper_style()
-    raw_error = (
+    training_error = (
         (calibration.raw_fraction_samples - calibration.true_fraction_samples + 0.5) % 1.0
         - 0.5
     ) / sample_rate_hz * 1e12
-    corrected_error = calibration.corrected_error_samples / sample_rate_hz * 1e12
-    fig, ax = plt.subplots(figsize=(7.2, 3.8))
-    ax.plot(calibration.true_fraction_samples, raw_error, color=_COLORS[1], label="Raw QLS bias")
-    ax.plot(calibration.true_fraction_samples, corrected_error, color=_COLORS[2], label="After LUT correction")
-    ax.axhline(0.0, color="black", lw=0.8)
-    ax.set(xlabel="True fractional delay (samples)", ylabel="Systematic error (ps)", title="Periodic QLS bias calibration")
-    ax.legend(loc="best")
+    validation_raw = validation.raw_error_samples / sample_rate_hz * 1e12
+    validation_corrected = validation.corrected_error_samples / sample_rate_hz * 1e12
+    fig, axes = plt.subplots(2, 1, figsize=(7.2, 5.6), sharex=True)
+    axes[0].plot(
+        calibration.true_fraction_samples,
+        training_error,
+        color=_COLORS[1],
+        lw=1.0,
+        label="LUT training scan: raw QLS bias",
+    )
+    axes[0].plot(
+        validation.true_fraction_samples,
+        validation_raw,
+        color=_COLORS[3],
+        lw=0.8,
+        alpha=0.8,
+        label="Held-out delays: raw QLS bias",
+    )
+    axes[0].set(ylabel="Error (ps)", title="QLS periodic bias before LUT correction")
+    axes[0].legend(loc="best")
+    axes[1].plot(
+        validation.true_fraction_samples,
+        validation_corrected,
+        color=_COLORS[2],
+        lw=1.0,
+        label="Held-out delays after LUT",
+    )
+    axes[1].axhline(0.0, color="black", lw=0.8)
+    axes[1].set(
+        xlabel="True fractional delay (samples)",
+        ylabel="Error (ps)",
+        title="Independent validation after LUT correction",
+    )
+    axes[1].legend(loc="best")
     return save_figure(fig, output_dir, "04_qls_lut_bias")
 
 
@@ -311,3 +340,61 @@ def plot_residual_summary(
     axes[0].set_title("Residual synchronization errors")
     axes[-1].tick_params(axis="x", rotation=12)
     return save_figure(fig, output_dir, "10_residual_error_summary")
+
+
+def plot_three_experiment_precision(
+    result: ThreeExperimentResult,
+    output_dir: str | Path,
+) -> list[Path]:
+    """图 11：三种论文配置的完整链路时间与脉冲到达精度。"""
+
+    configure_paper_style()
+    fig, axes = plt.subplots(
+        1,
+        3,
+        figsize=(11.2, 3.7),
+        sharey=True,
+        gridspec_kw={"wspace": 0.05},
+    )
+    for profile_index, (axis, label) in enumerate(
+        zip(axes, result.profile_labels)
+    ):
+        axis.semilogy(
+            result.snr_db,
+            result.time_transfer_std_s[profile_index] * 1e12,
+            "o-",
+            color=_COLORS[0],
+            lw=1.2,
+            label="Two-way time transfer",
+        )
+        axis.semilogy(
+            result.snr_db,
+            result.beamforming_std_s[profile_index] * 1e12,
+            "s--",
+            color=_COLORS[1],
+            lw=1.2,
+            label="RX pulse interarrival",
+        )
+        axis.semilogy(
+            result.snr_db,
+            result.crlb_best_case_std_s * 1e12,
+            ":",
+            color="black",
+            lw=1.2,
+            label="CRLB at SNR + 3 dB",
+        )
+        axis.set(
+            xlabel=f"Time-transfer SNR (dB)\n({chr(97 + profile_index)})",
+            title=label,
+        )
+        axis.tick_params(which="both", direction="in")
+    axes[0].set_ylabel("Sample standard deviation (ps)")
+    axes[2].legend(loc="upper right", frameon=False, fontsize=8)
+    fig.suptitle("Three communication-chain synchronization experiments")
+    fig.subplots_adjust(top=0.80, bottom=0.22, left=0.07, right=0.99)
+    return save_figure(
+        fig,
+        output_dir,
+        "11_three_experiment_precision",
+        tight_layout=False,
+    )

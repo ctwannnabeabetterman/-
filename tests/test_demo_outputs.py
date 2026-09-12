@@ -11,9 +11,16 @@ import unittest
 
 import numpy as np
 
-from config import ClockTrackingConfig, MonteCarloConfig, PhaseFeedbackConfig
+from config import (
+    ClockTrackingConfig,
+    MonteCarloConfig,
+    PhaseFeedbackConfig,
+    ThreeExperimentConfig,
+)
 from main_demo import build_demo_settings, run_demo
+from plotting import plot_spectrum
 from results_io import write_csv_columns, write_json
+from waveforms import generate_two_tone
 
 
 class DemoSettingsTests(unittest.TestCase):
@@ -24,6 +31,7 @@ class DemoSettingsTests(unittest.TestCase):
 
         self.assertEqual(settings.monte_carlo.trials_per_snr, 100)
         self.assertEqual(settings.monte_carlo.snr_db_values, tuple(range(6, 37, 3)))
+        self.assertEqual(settings.three_experiment.trials_per_snr, 100)
         self.assertLess(settings.lut_grid_points, 2001)
 
     def test_formal_mode_uses_default_waveform_and_one_thousand_trials(self) -> None:
@@ -32,6 +40,22 @@ class DemoSettingsTests(unittest.TestCase):
         self.assertEqual(settings.waveform.pulse_duration_s, 10e-6)
         self.assertEqual(settings.lut_grid_points, 2001)
         self.assertEqual(settings.monte_carlo.trials_per_snr, 1000)
+        self.assertEqual(settings.three_experiment.trials_per_snr, 1000)
+
+    def test_spectrum_plot_uses_formula_tx_and_received_iq(self) -> None:
+        waveform = generate_two_tone(build_demo_settings("fast_demo").waveform)
+        rng = np.random.default_rng(17)
+        received = waveform.samples + 0.01 * (
+            rng.standard_normal(waveform.samples.size)
+            + 1j * rng.standard_normal(waveform.samples.size)
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            paths = plot_spectrum(waveform, received, directory)
+            sizes = [path.stat().st_size for path in paths]
+
+        self.assertEqual(len(paths), 2)
+        self.assertTrue(all(size > 0 for size in sizes))
 
     def test_small_end_to_end_run_applies_estimator_control_outputs(self) -> None:
         base = build_demo_settings("fast_demo")
@@ -54,6 +78,11 @@ class DemoSettingsTests(unittest.TestCase):
             monte_carlo=MonteCarloConfig(
                 snr_db_values=(30.0,),
                 trials_per_snr=3,
+                seed=2023,
+            ),
+            three_experiment=ThreeExperimentConfig(
+                snr_db_values=(30.0,),
+                trials_per_snr=2,
                 seed=2023,
             ),
         )
@@ -106,6 +135,11 @@ class DemoSettingsTests(unittest.TestCase):
                 channel_phase_rate_rad_per_s=10.0,
             ),
             monte_carlo=MonteCarloConfig(
+                snr_db_values=(30.0,),
+                trials_per_snr=2,
+                seed=2023,
+            ),
+            three_experiment=ThreeExperimentConfig(
                 snr_db_values=(30.0,),
                 trials_per_snr=2,
                 seed=2023,

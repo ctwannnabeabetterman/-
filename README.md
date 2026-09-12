@@ -1,6 +1,8 @@
 # 两节点分布式 AP 时间同步与相干合成 Demo
 
-这是一个以**皮秒级双向时间同步**为主目标的纯 Python 复基带仿真。它参考论文 *Wireless Picosecond Time Synchronization for Distributed Antenna Arrays*，实现脉冲双音、有限窗口接收、匹配滤波、三点 QLS、周期偏差 LUT、四时间戳双向时间传递和持续钟差跟踪。同步后的频率估计、RX 到达对齐、导频相位反馈与两 AP 相干合成用于证明时间估计能进入下游闭环；项目不模拟论文自混频电路，也不连接 USRP。
+这是一个以**皮秒级双向时间同步**为主目标的纯 Python 复基带通信仿真。它参考论文 *Wireless Picosecond Time Synchronization for Distributed Antenna Arrays*，从公式生成脉冲双音 IQ，并实际经过 DAC 采样网格、传播时延、AWGN、独立 RX ADC 网格、粗捕获、FFT 匹配滤波、整数峰、三点 QLS、周期偏差 LUT 和四时间戳双向时间传递。同步后的频率估计、RX 到达对齐、导频相位反馈与两 AP 相干合成用于验证估计结果能够驱动下游链路；项目不模拟论文自混频电路，也不连接 USRP。
+
+项目另外按论文定义运行三种等效软件实验：全有线时间—频率传递、无线时间/有线频率传递、全无线时间—频率传递。三者共用同一个 IQ 接收与 QLS/LUT 时间估计器；全无线配置利用连续 10 MHz 参考上相隔 50 ms 的两个带噪 IQ 窗口估计相位差和采样钟速率。每个 SNR 和每个 trial 都真正运行上述链路，曲线不是把误差公式直接代入后绘制。
 
 Demo 比较四种状态：
 
@@ -22,7 +24,7 @@ cd "E:\研究生\研究生科研相关\分布式系统波束赋形\distributed_b
 & "C:\Users\ct183\anaconda3\envs\gpu_torch\python.exe" main_demo.py --mode fast_demo
 ```
 
-`fast_demo` 使用 2 µs 脉冲、401 点 LUT、每个 SNR 100 次 Monte Carlo，持续跟踪 40 轮（2 秒）。正式模式使用 10 µs 脉冲、2001 点 LUT、每个 SNR 1000 次 Monte Carlo，持续跟踪 100 轮（5 秒）。周期频率观测分别为 1 ms 和 2 ms，支持随后 50 ms 周期内的相干保持：
+`fast_demo` 使用 2 µs 脉冲、401 点 LUT、每个 SNR 100 次 Monte Carlo 和三配置试验，持续跟踪 40 轮（2 秒）。正式模式使用论文的 10 µs 时间同步脉冲、2001 点 LUT、每个 SNR 1000 次 Monte Carlo 和三配置试验，持续跟踪 100 轮（5 秒）。周期频率观测分别为 1 ms 和 2 ms，支持随后 50 ms 周期内的相干保持：
 
 ```powershell
 & "C:\Users\ct183\anaconda3\envs\gpu_torch\python.exe" main_demo.py --mode formal
@@ -52,12 +54,15 @@ results/<mode>/
 ├── run_config.json              # 本次运行的全部配置
 ├── summary.json                 # 运行环境、状态来源、主要结论和单位化指标
 ├── manifest.json                # 输出文件清单
-├── lut_bias.csv                 # LUT 扫描真值、原始偏差、校正偏差
+├── lut_bias.csv                 # 未参与训练的分数时延验证集及校正误差
+├── lut_training.csv             # LUT 构建网格和原始 QLS 系统偏差
 ├── clock_tracking.csv           # 多轮钟差真值、估计、校正和残差
 ├── frequency_tracking.csv       # 真实、单次估计、跟踪和残余频偏
 ├── beamforming_states.csv       # 四状态同步误差、功率和增益
 ├── monte_carlo.csv              # 6:3:36 dB Monte Carlo 与 CRLB
 ├── joint_tracking.csv           # 每轮捕获状态、控制命令、保持误差和失锁记录
+├── three_experiment_summary.csv # 三配置 6:3:36 dB 标准差曲线
+├── three_experiment_samples.csv # 三配置每个 trial 的原始估计结果
 ├── lut_cache/                   # 按波形签名缓存的 NPZ/JSON LUT
 └── figures/
     ├── 01_two_tone_time_waveform.{png,pdf}
@@ -69,10 +74,11 @@ results/<mode>/
     ├── 07_frequency_tracking.{png,pdf}
     ├── 08_received_waveforms.{png,pdf}
     ├── 09_four_state_coherent_gain.{png,pdf}
-    └── 10_residual_error_summary.{png,pdf}
+    ├── 10_residual_error_summary.{png,pdf}
+    └── 11_three_experiment_precision.{png,pdf}
 ```
 
-图 01–06 是时间同步主结果，图 07–10 是频率、相位和相干合成的下游验证。图 02 明确画出 −20 MHz 和 +20 MHz 两个理想载频分量；有限 10 µs 脉冲的实际 FFT 会把每条谱线与脉冲门函数频谱卷积，因而具有有限主瓣和旁瓣，不能把它解释成额外载频。所有图同时保存 PNG 和 PDF，内部时间量统一用秒，CSV 和图片按可读量级转换为 ns 或 ps。
+图 01–06 是时间同步主结果，图 07–10 是频率、相位和相干合成的下游验证，图 11 对应论文三种配置的 SNR 扫描。图 01 由双音公式逐样点生成；图 02 对发送 IQ 和经过信道、噪声及接收采样后的 IQ 直接做 FFT，没有使用理想谱线或预设数据。有限 10 µs 脉冲使 ±20 MHz 两个音点与包络频谱卷积，所以主瓣有有限宽度和旁瓣。所有图同时保存 PNG 和 PDF，内部时间量统一用秒，CSV 和图片按可读量级转换为 ns 或 ps。
 
 ## 算法与符号约定
 
@@ -91,10 +97,10 @@ AP0 取 `delta_0 = epsilon_0 = 0`。`ClockPlantConfig` 保存未控制真值，`
 复基带波形为
 
 ```text
-s(t) = w(t) [exp(-j*pi*B*t) + exp(+j*pi*B*t)]
+s(t) = A w(t) [exp(-j*pi*B*t) + exp(+j*pi*B*t)]
 ```
 
-默认 `B=40 MHz`、`fs=200 MSa/s`、脉冲宽度 `10 µs`、升降沿 `50 ns`。`5.8 GHz` 载频只用于传播相位和残余时间误差到载频相位的换算，不会以 `200 MSa/s` 直接采样。
+其中 `A` 由代码计算，使活动区平均功率归一为 1。默认 `B=40 MHz`、`fs=200 MSa/s`、脉冲宽度 `10 µs`、升降沿 `50 ns`。`5.8 GHz` 载频只用于传播相位和残余时间误差到载频相位的换算，不会以 `200 MSa/s` 直接采样。
 
 任意分数时延由补零 FFT 相移实现。正时延表示接收信号向更大的样点下标移动；整数时延走严格的零填充移位路径，避免循环回绕。
 
@@ -113,7 +119,7 @@ mu = 0.5 * (y[-1] - y[+1]) / (y[-1] - 2*y[0] + y[+1])
 tau_hat = (integer_lag + mu) / fs
 ```
 
-峰位于边界或曲率接近零时禁用插值。LUT 在 `[-0.5, 0.5)` 扫描无噪声真分数时延，以“估计位置到偏差”的周期插值校正 QLS。缓存签名包含算法版本、`B`、`fs`、脉冲宽度、包络和网格数；任一参数变化都会使用新的缓存。
+峰位于边界或曲率接近零时禁用插值。LUT 在 `[-0.5, 0.5)` 扫描无噪声真分数时延，以“估计位置到偏差”的周期插值校正 QLS。缓存签名包含算法版本、`B`、`fs`、脉冲宽度、包络和网格数；任一参数变化都会使用新的缓存。报告中的 QLS/LUT 指标来自位于训练点半步之间的独立分数时延网格，训练点只写入 `lut_training.csv`，避免用 LUT 自己的节点证明自身精度。
 
 ### 双向时间传递
 
@@ -216,6 +222,7 @@ Monte Carlo 每个 trial 都执行有限窗口四时间戳交换、非零随机 
 | `BeamformingConfig` | 两路 RX 静态信道和功率归一化 | `per_ap_fixed` |
 | `PhaseFeedbackConfig` | 导频、SNR、反馈延迟和量化 | 1024、32 dB、100 µs、12 bit |
 | `MonteCarloConfig` | SNR 轴、次数、种子、噪声带宽 | 6:3:36 dB、100、2023 |
+| `ThreeExperimentConfig` | 三配置、10 MHz 频率参考、50 MHz 下游脉冲 | 6:3:36 dB、50 ms、1 µs |
 
 `build_demo_settings()` 只组合两套运行预设。算法函数不在内部改变配置。
 
@@ -238,7 +245,8 @@ Monte Carlo 每个 trial 都执行有限窗口四时间戳交换、非零随机 
 | `beamforming.py` | 两路到达、CFO、相位及四状态合成 |
 | `crlb.py` | SNR/PSD 映射、均方带宽和时延 CRLB |
 | `monte_carlo.py` | SNR 扫描及六项统计 |
-| `plotting.py` | 十组论文风格 PNG/PDF 图 |
+| `experiment_suite.py` | 三种论文配置的公共 IQ→QLS/LUT→四时间戳链路 |
+| `plotting.py` | 十一组论文风格 PNG/PDF 图 |
 | `results_io.py` | JSON/CSV 序列化 |
 | `main_demo.py` | 配置、闭环编排、结果保存和 CLI |
 | `verify_results.py` | 机器可读结果阈值验收 |
@@ -271,7 +279,7 @@ Monte Carlo 每个 trial 都执行有限窗口四时间戳交换、非零随机 
 - 独立时钟当前影响同步 burst 的 DAC/ADC 网格；长数据流的连续采样频偏重采样、RX 自身自由运行频偏及 RF 相噪仍未完整建模；
 - 粗捕获短码增加了频谱与时间开销；当前 burst 不再是论文的纯单个双音脉冲，CRLB 仍只针对双音精测波形；
 - CRLB 使用理想已知波形、AWGN 和无干扰假设；LUT 训练网格上的接近零残差不代表噪声下估计无误差。
-- 论文的三种 SDR/测试配置没有伪装成软件配置预设；当前两个模式只用于计算量切换，并不代表论文硬件配置。
+- 论文三种配置已按时间链路和频率参考来源建立软件等效预设；它们验证相同基带算法在三种拓扑下的统计过程，不等同于三套论文硬件、线缆或无线射频环境。
 
 ## 数值注意事项
 

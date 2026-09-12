@@ -71,8 +71,22 @@ def write_result_readme(
     waveform = summary["waveform"]
     delay = summary["delay_demo"]
     clock = summary["clock_tracking"]
+    lut = summary["lut"]
     high_snr = summary["monte_carlo_highest_snr"]
     full_sync = summary["beamforming"]["full_sync"]
+    profiles = summary["three_experiments"]["profiles"]
+    profile_lines = "\n".join(
+        "- {label}：时间传递标准差 {time:.3f} ps，50 MHz 脉冲到达差标准差 "
+        "{beam:.3f} ps，残余采样钟速率 RMSE {rate:.6f} ppm，捕获失败率 "
+        "{failure:.3%}。".format(
+            label=profile["label"],
+            time=profile["time_transfer_std_ps"],
+            beam=profile["beamforming_std_ps"],
+            rate=profile["residual_clock_rate_rmse_ppm"],
+            failure=profile["acquisition_failure_rate"],
+        )
+        for profile in profiles.values()
+    )
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     report = f"""# 本次 Demo 结果
@@ -82,11 +96,20 @@ def write_result_readme(
 ## 时间同步主结果
 
 - 波形：{waveform['sample_rate_msa_s']:.0f} MSa/s，两个基带音点位于 ±{waveform['tone_separation_mhz'] / 2:.0f} MHz，间隔 {waveform['tone_separation_mhz']:.0f} MHz，脉冲长度 {waveform['pulse_duration_us']:.0f} µs。
+- QLS/LUT 独立验证：留出 {lut['validation_points']} 个未参与 LUT 构建的分数时延；原始 QLS RMSE {lut['raw_rmse_ps']:.3f} ps，校正后 {lut['corrected_rmse_ps']:.3f} ps，最大绝对残差 {lut['corrected_max_abs_bias_ps']:.3f} ps。
 - 单次时延：真值 {delay['true_delay_ns']:.6f} ns，QLS + LUT 估计 {delay['lut_corrected_delay_ns']:.6f} ns，误差 {delay['corrected_error_ps']:.3f} ps。
 - {high_snr['snr_db']:.0f} dB Monte Carlo：QLS + LUT 时延 RMSE {high_snr['qls_lut_rmse_ps']:.3f} ps，CRLB 标准差 {high_snr['crlb_std_ps']:.3f} ps，完整双向钟差 RMSE {high_snr['clock_offset_rmse_ps']:.3f} ps。
 - 多轮控制末次更新后钟差残差：{clock['final_residual_after_update_ps']:.3f} ps。
 
-图 01–06 和 `lut_bias.csv`、`clock_tracking.csv`、`monte_carlo.csv` 是时间同步复现的主要证据。图 02 画的是两个理想载频分量；有限脉冲的 FFT 会使每条谱线与 10 µs 门函数频谱卷积，因此出现主瓣和旁瓣。
+图 01–06 和 `lut_bias.csv`、`lut_training.csv`、`clock_tracking.csv`、`monte_carlo.csv` 是时间同步复现的主要证据。图 01 的波形由双音公式逐样点生成；图 02 对发送 IQ 和经过信道、AWGN、接收采样后的 IQ 做 FFT，没有直接绘制理想谱线。有限脉冲会使 ±20 MHz 两个音点与脉冲包络频谱卷积，所以实际主瓣具有有限宽度和旁瓣。
+
+## 论文三种实验配置的等效软件链路
+
+每个统计点都依次运行接收 IQ、匹配滤波、整数峰、QLS、LUT、四时间戳双向校时，再用公式生成的 50 MHz、1 µs 脉冲经过 DAC 网格、信道、AWGN、RX ADC 和同一到达时刻估计器。全无线频率配置另外从连续 10 MHz 参考上相隔 50 ms 的两个带噪 IQ 窗口估计相位差和采样钟速率。以下为最高 SNR 点：
+
+{profile_lines}
+
+图 11 和 `three_experiment_summary.csv` 给出完整 6:3:36 dB 曲线；`three_experiment_samples.csv` 保存每个 trial 的原始结果。三种配置是论文拓扑的复基带等效模型，其中“cabled”与“wireless”选择传播时延和频率参考来源，不包含线缆/RF 前端群时延、无线多径和自混频硬件。
 
 ## 下游相干合成验证
 

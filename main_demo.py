@@ -24,6 +24,7 @@ from config import (
     MonteCarloConfig,
     OscillatorConfig,
     PhaseFeedbackConfig,
+    ThreeExperimentConfig,
     TwoWayConfig,
     WaveformConfig,
 )
@@ -38,14 +39,22 @@ from frequency_sync import (
     simulate_frequency_reference,
     update_frequency_tracker,
 )
-from lut_calibration import correct_qls_fraction, load_or_build_lut, wrap_fractional_sample
+from lut_calibration import (
+    correct_qls_fraction,
+    load_or_build_lut,
+    validate_qls_lut,
+    wrap_fractional_sample,
+)
 from models import (
     BeamformingPlantState,
     BeamformingResult,
     ClockTrackingResult,
     MonteCarloResult,
+    QLSValidation,
+    ThreeExperimentResult,
 )
 from monte_carlo import run_delay_monte_carlo
+from experiment_suite import run_three_experiment_suite
 from oscillator_model import LocalOscillator
 from phase_sync import simulate_channel_feedback
 from plotting import (
@@ -59,6 +68,7 @@ from plotting import (
     plot_rmse_crlb,
     plot_spectrum,
     plot_time_waveform,
+    plot_three_experiment_precision,
 )
 from results_io import write_csv_columns, write_json, write_result_readme
 from waveforms import generate_two_tone
@@ -83,6 +93,7 @@ class DemoSettings:
     lut_grid_points: int
     frequency_rounds: int
     joint_tracking: JointTrackingConfig
+    three_experiment: ThreeExperimentConfig
 
 
 def build_demo_settings(mode: str) -> DemoSettings:
@@ -146,6 +157,9 @@ def build_demo_settings(mode: str) -> DemoSettings:
         lut_grid_points=2001 if formal else 401,
         frequency_rounds=20 if formal else 12,
         joint_tracking=JointTrackingConfig(rounds=100 if formal else 40),
+        three_experiment=ThreeExperimentConfig(
+            trials_per_snr=1000 if formal else 100,
+        ),
     )
 
 
@@ -203,6 +217,7 @@ def _run_frequency_rounds(
 def _save_numeric_tables(
     output_dir: Path,
     calibration,
+    validation: QLSValidation,
     waveform_config: WaveformConfig,
     clock_result: ClockTrackingResult,
     frequency_true: np.ndarray,
@@ -210,8 +225,9 @@ def _save_numeric_tables(
     frequency_tracked: np.ndarray,
     beamforming_states: dict[str, BeamformingResult],
     monte_carlo: MonteCarloResult,
+    three_experiment: ThreeExperimentResult,
 ) -> list[Path]:
-    """保存复现实验曲线所需的五张 CSV 表。"""
+    """保存 QLS/LUT、同步跟踪和三配置实验的可复现数值表。"""
 
     raw_bias_samples = np.asarray(
         wrap_fractional_sample(
@@ -223,11 +239,22 @@ def _save_numeric_tables(
         write_csv_columns(
             output_dir / "lut_bias.csv",
             {
+                "true_fraction_samples": validation.true_fraction_samples,
+                "raw_qls_fraction_samples": validation.raw_fraction_samples,
+                "corrected_fraction_samples": validation.corrected_fraction_samples,
+                "raw_bias_ps": validation.raw_error_samples
+                / waveform_config.sample_rate_hz * 1e12,
+                "corrected_bias_ps": validation.corrected_error_samples
+                / waveform_config.sample_rate_hz * 1e12,
+            },
+        ),
+        write_csv_columns(
+            output_dir / "lut_training.csv",
+            {
                 "true_fraction_samples": calibration.true_fraction_samples,
-                "raw_bias_ps": raw_bias_samples / waveform_config.sample_rate_hz * 1e12,
-                "corrected_bias_ps": calibration.corrected_error_samples
-                / waveform_config.sample_rate_hz
-                * 1e12,
+                "estimated_fraction_samples": calibration.raw_fraction_samples,
+                "raw_bias_ps": raw_bias_samples
+                / waveform_config.sample_rate_hz * 1e12,
             },
         ),
         write_csv_columns(
@@ -302,12 +329,83 @@ def _save_numeric_tables(
                 "acquisition_failure_rate": monte_carlo.acquisition_failure_rate,
             },
         ),
+        write_csv_columns(
+            output_dir / "three_experiment_summary.csv",
+            {
+                "case": [
+                    key
+                    for key in three_experiment.profile_keys
+                    for _ in three_experiment.snr_db
+                ],
+                "time_link": [
+                    mode
+                    for mode in three_experiment.time_link_modes
+                    for _ in three_experiment.snr_db
+                ],
+                "frequency_link": [
+                    mode
+                    for mode in three_experiment.frequency_link_modes
+                    for _ in three_experiment.snr_db
+                ],
+                "snr_db": np.tile(
+                    three_experiment.snr_db, len(three_experiment.profile_keys)
+                ),
+                "time_transfer_std_ps": three_experiment.time_transfer_std_s.reshape(-1)
+                * 1e12,
+                "beamforming_std_ps": three_experiment.beamforming_std_s.reshape(-1)
+                * 1e12,
+                "crlb_nominal_ps": np.tile(
+                    three_experiment.crlb_std_s * 1e12,
+                    len(three_experiment.profile_keys),
+                ),
+                "crlb_best_case_ps": np.tile(
+                    three_experiment.crlb_best_case_std_s * 1e12,
+                    len(three_experiment.profile_keys),
+                ),
+                "residual_clock_rate_rmse_ppm": three_experiment.residual_clock_rate_rmse.reshape(-1)
+                * 1e6,
+                "acquisition_failure_rate": three_experiment.acquisition_failure_rate.reshape(-1),
+            },
+        ),
+        write_csv_columns(
+            output_dir / "three_experiment_samples.csv",
+            {
+                "case": [
+                    key
+                    for key in three_experiment.profile_keys
+                    for _ in range(
+                        three_experiment.snr_db.size
+                        * three_experiment.time_transfer_samples_s.shape[2]
+                    )
+                ],
+                "snr_db": np.tile(
+                    np.repeat(
+                        three_experiment.snr_db,
+                        three_experiment.time_transfer_samples_s.shape[2],
+                    ),
+                    len(three_experiment.profile_keys),
+                ),
+                "trial": np.tile(
+                    np.arange(
+                        1, three_experiment.time_transfer_samples_s.shape[2] + 1
+                    ),
+                    len(three_experiment.profile_keys)
+                    * three_experiment.snr_db.size,
+                ),
+                "time_correction_ps": three_experiment.time_transfer_samples_s.reshape(-1)
+                * 1e12,
+                "beamforming_interarrival_ps": three_experiment.beamforming_samples_s.reshape(-1)
+                * 1e12,
+                "residual_clock_rate_ppm": three_experiment.residual_clock_rate_samples.reshape(-1)
+                * 1e6,
+            },
+        ),
     ]
     return paths
 
 
 def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object]:
-    """执行时间、频率、相位同步闭环并生成数值结果和十组图。"""
+    """执行时间、频率、相位同步闭环并生成数值结果和十一组图。"""
 
     destination = Path(output_dir)
     figures_dir = destination / "figures"
@@ -320,6 +418,11 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         settings.waveform,
         cache_dir,
         grid_points=settings.lut_grid_points,
+    )
+    validation = validate_qls_lut(
+        settings.waveform,
+        calibration,
+        validation_points=settings.lut_grid_points - 1,
     )
 
     true_delay_s = 37.25 / settings.waveform.sample_rate_hz
@@ -451,6 +554,11 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         beamforming_config=settings.beamforming,
         phase_feedback_config=settings.phase_feedback,
     )
+    three_experiment = run_three_experiment_suite(
+        settings.waveform,
+        calibration,
+        settings.three_experiment,
+    )
     joint_result = run_joint_tracking(settings.waveform, calibration, settings.clock_plant,
         settings.oscillator, settings.frequency, settings.beamforming, settings.phase_feedback,
         settings.joint_tracking, settings.two_way)
@@ -464,8 +572,11 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         ),
         dtype=np.float64,
     ) / settings.waveform.sample_rate_hz
-    corrected_lut_bias = (
-        calibration.corrected_error_samples / settings.waveform.sample_rate_hz
+    validation_raw_bias = (
+        validation.raw_error_samples / settings.waveform.sample_rate_hz
+    )
+    validation_corrected_bias = (
+        validation.corrected_error_samples / settings.waveform.sample_rate_hz
     )
     beamforming_summary = {
         name: {
@@ -533,13 +644,22 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         "lut": {
             "signature": calibration.signature,
             "grid_points": calibration.grid_points,
-            "raw_max_abs_bias_ps": float(np.max(np.abs(raw_lut_bias)) * 1e12),
-            "raw_rmse_ps": float(np.sqrt(np.mean(raw_lut_bias**2)) * 1e12),
+            "validation_points": validation.true_fraction_samples.size,
+            "validation_policy": "half-step grid disjoint from LUT training fractions",
+            "training_raw_max_abs_bias_ps": float(
+                np.max(np.abs(raw_lut_bias)) * 1e12
+            ),
+            "raw_max_abs_bias_ps": float(
+                np.max(np.abs(validation_raw_bias)) * 1e12
+            ),
+            "raw_rmse_ps": float(
+                np.sqrt(np.mean(validation_raw_bias**2)) * 1e12
+            ),
             "corrected_max_abs_bias_ps": float(
-                np.max(np.abs(corrected_lut_bias)) * 1e12
+                np.max(np.abs(validation_corrected_bias)) * 1e12
             ),
             "corrected_rmse_ps": float(
-                np.sqrt(np.mean(corrected_lut_bias**2)) * 1e12
+                np.sqrt(np.mean(validation_corrected_bias**2)) * 1e12
             ),
         },
         "delay_demo": {
@@ -608,6 +728,40 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
                 monte_carlo.coherent_gain_vs_incoherent_db[-1]
             ),
         },
+        "three_experiments": {
+            "statistic": "sample standard deviation, ddof=1",
+            "time_snr_definition": "active-region complex AWGN sample SNR",
+            "frequency_reference_model": "continuous 10 MHz reference, two noisy IQ windows separated by the 50 ms synchronization interval",
+            "beamforming_readout": "formula-generated 50 MHz, 1 us pulse through DAC/channel/AWGN/RX-ADC/matched-filter/QLS/LUT",
+            "profiles": {
+                key: {
+                    "label": label,
+                    "time_link": time_link,
+                    "frequency_link": frequency_link,
+                    "highest_snr_db": float(three_experiment.snr_db[-1]),
+                    "time_transfer_std_ps": float(
+                        three_experiment.time_transfer_std_s[index, -1] * 1e12
+                    ),
+                    "beamforming_std_ps": float(
+                        three_experiment.beamforming_std_s[index, -1] * 1e12
+                    ),
+                    "residual_clock_rate_rmse_ppm": float(
+                        three_experiment.residual_clock_rate_rmse[index, -1] * 1e6
+                    ),
+                    "acquisition_failure_rate": float(
+                        three_experiment.acquisition_failure_rate[index, -1]
+                    ),
+                }
+                for index, (key, label, time_link, frequency_link) in enumerate(
+                    zip(
+                        three_experiment.profile_keys,
+                        three_experiment.profile_labels,
+                        three_experiment.time_link_modes,
+                        three_experiment.frequency_link_modes,
+                    )
+                )
+            },
+        },
     }
 
     write_json(destination / "run_config.json", settings)
@@ -615,6 +769,7 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
     _save_numeric_tables(
         destination,
         calibration,
+        validation,
         settings.waveform,
         clock_result,
         frequency_true,
@@ -622,16 +777,17 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         frequency_tracked,
         beamforming_states,
         monte_carlo,
+        three_experiment,
     )
 
     figure_paths: list[Path] = []
     figure_paths += plot_time_waveform(waveform, figures_dir)
-    figure_paths += plot_spectrum(settings.waveform, figures_dir)
+    figure_paths += plot_spectrum(waveform, delay_observation.samples, figures_dir)
     figure_paths += plot_correlation_qls(
         correlation, raw_delay, settings.waveform.sample_rate_hz, figures_dir
     )
     figure_paths += plot_lut_bias(
-        calibration, settings.waveform.sample_rate_hz, figures_dir
+        calibration, validation, settings.waveform.sample_rate_hz, figures_dir
     )
     figure_paths += plot_rmse_crlb(monte_carlo, figures_dir)
     figure_paths += plot_clock_tracking(clock_result, figures_dir)
@@ -643,6 +799,7 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
     )
     figure_paths += plot_coherent_gain(beamforming_states, figures_dir)
     figure_paths += plot_residual_summary(beamforming_states, figures_dir)
+    figure_paths += plot_three_experiment_precision(three_experiment, figures_dir)
 
     manifest = {
         "mode": settings.mode,
@@ -650,11 +807,14 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
         "figures": [str(path.relative_to(destination)) for path in figure_paths],
         "tables": [
             "lut_bias.csv",
+            "lut_training.csv",
             "clock_tracking.csv",
             "frequency_tracking.csv",
             "beamforming_states.csv",
             "monte_carlo.csv",
             "joint_tracking.csv",
+            "three_experiment_summary.csv",
+            "three_experiment_samples.csv",
         ],
         "summary": "summary.json",
         "configuration": "run_config.json",

@@ -309,6 +309,69 @@ class MonteCarloConfig:
 
 
 @dataclass(frozen=True)
+class ThreeExperimentConfig:
+    """论文三种时间/频率传递配置的软件通信仿真参数。"""
+
+    snr_db_values: tuple[float, ...] = tuple(float(value) for value in range(6, 37, 3))
+    trials_per_snr: int = 100
+    seed: int = 120923
+    sync_interval_s: float = 50e-3
+    initial_clock_offset_s: float = 100e-9
+    cabled_time_delay_s: float = 0.9144 / 2e8
+    wireless_time_delay_s: float = 0.90 / 299_792_458.0
+    wireless_clock_rate_offset: float = 0.2e-6
+    frequency_reference_hz: float = 10e6
+    frequency_reference_snr_db: float = 30.0
+    frequency_capture_duration_s: float = 40e-6
+    beamforming_tone_separation_hz: float = 50e6
+    beamforming_pulse_duration_s: float = 1e-6
+    beamforming_carrier_frequency_hz: float = 1.2e9
+    receiver_margin_s: float = 2e-6
+    data_gate_half_width_samples: float = 2.5
+    snr_uncertainty_db: float = 3.0
+
+    def __post_init__(self) -> None:
+        values = (
+            *self.snr_db_values,
+            self.sync_interval_s,
+            self.initial_clock_offset_s,
+            self.cabled_time_delay_s,
+            self.wireless_time_delay_s,
+            self.wireless_clock_rate_offset,
+            self.frequency_reference_hz,
+            self.frequency_reference_snr_db,
+            self.frequency_capture_duration_s,
+            self.beamforming_tone_separation_hz,
+            self.beamforming_pulse_duration_s,
+            self.beamforming_carrier_frequency_hz,
+            self.receiver_margin_s,
+            self.data_gate_half_width_samples,
+            self.snr_uncertainty_db,
+        )
+        if not self.snr_db_values or not all(math.isfinite(value) for value in values):
+            raise ValueError("三配置实验参数必须为有限数且 SNR 轴非空")
+        if self.trials_per_snr < 2:
+            raise ValueError("三配置实验每个 SNR 至少需要两个试验")
+        if min(
+            self.sync_interval_s,
+            self.frequency_reference_hz,
+            self.frequency_capture_duration_s,
+            self.beamforming_tone_separation_hz,
+            self.beamforming_pulse_duration_s,
+            self.beamforming_carrier_frequency_hz,
+            self.receiver_margin_s,
+            self.data_gate_half_width_samples,
+        ) <= 0.0:
+            raise ValueError("三配置实验的时间、频率和搜索门参数必须为正")
+        if min(self.cabled_time_delay_s, self.wireless_time_delay_s) < 0.0:
+            raise ValueError("三配置实验传播时延必须非负")
+        if self.wireless_clock_rate_offset <= -1.0:
+            raise ValueError("无线频率参考前的采样时钟速率必须为正")
+        if self.snr_uncertainty_db < 0.0:
+            raise ValueError("SNR 不确定度必须非负")
+
+
+@dataclass(frozen=True)
 class JointTrackingConfig:
     """持续联合同步、漂移、掉帧及锁定判据。"""
 

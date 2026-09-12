@@ -98,6 +98,33 @@ class QLSCalibration:
 
 
 @dataclass(frozen=True)
+class QLSValidation:
+    """独立分数时延网格上的 QLS/LUT 验证结果，所有数组单位为样点。"""
+
+    true_fraction_samples: FloatArray
+    raw_fraction_samples: FloatArray
+    corrected_fraction_samples: FloatArray
+    raw_error_samples: FloatArray
+    corrected_error_samples: FloatArray
+
+    @property
+    def raw_rmse_samples(self) -> float:
+        return float(np.sqrt(np.mean(self.raw_error_samples**2)))
+
+    @property
+    def corrected_rmse_samples(self) -> float:
+        return float(np.sqrt(np.mean(self.corrected_error_samples**2)))
+
+    @property
+    def raw_max_abs_error_samples(self) -> float:
+        return float(np.max(np.abs(self.raw_error_samples)))
+
+    @property
+    def corrected_max_abs_error_samples(self) -> float:
+        return float(np.max(np.abs(self.corrected_error_samples)))
+
+
+@dataclass(frozen=True)
 class LinkDelayMeasurement:
     """双音起点相对 ADC 首样点的本地时延；加 capture_start_local_s 得到时间戳。"""
 
@@ -256,3 +283,23 @@ class MonteCarloResult:
     coherent_gain_vs_incoherent_db: FloatArray
     residual_frequency_rmse_hz: FloatArray
     acquisition_failure_rate: FloatArray
+
+
+@dataclass(frozen=True)
+class ThreeExperimentResult:
+    """三种论文配置的逐次通信样本及 SNR 统计。"""
+
+    profile_keys: tuple[str, ...]
+    profile_labels: tuple[str, ...]
+    time_link_modes: tuple[str, ...]
+    frequency_link_modes: tuple[str, ...]
+    snr_db: FloatArray
+    time_transfer_std_s: FloatArray
+    beamforming_std_s: FloatArray
+    crlb_std_s: FloatArray
+    crlb_best_case_std_s: FloatArray
+    residual_clock_rate_rmse: FloatArray
+    acquisition_failure_rate: FloatArray
+    time_transfer_samples_s: FloatArray
+    beamforming_samples_s: FloatArray
+    residual_clock_rate_samples: FloatArray

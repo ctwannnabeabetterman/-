@@ -14,7 +14,7 @@ from numpy.typing import ArrayLike, NDArray
 from channel import apply_fractional_delay
 from config import WaveformConfig
 from delay_estimator import DelaySearchGate, estimate_delay, fft_matched_filter
-from models import QLSCalibration
+from models import QLSCalibration, QLSValidation
 from waveforms import generate_two_tone
 
 
@@ -84,11 +84,12 @@ def correct_qls_fraction(
     return corrected
 
 
-def build_qls_lut(config: WaveformConfig, grid_points: int = 2001) -> QLSCalibration:
-    """用当前无噪声双音波形扫描一个完整分数样点周期。"""
+def _estimate_fractional_grid(
+    config: WaveformConfig,
+    true_fraction_samples: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """经分数时延信道、匹配滤波和 QLS 估计一组真实分数位置。"""
 
-    signature = calibration_signature(config, grid_points)
-    true_fraction = np.linspace(-0.5, 0.5, grid_points, endpoint=False, dtype=np.float64)
     waveform = generate_two_tone(config)
     nominal_integer = 24
     tx_buffer = np.pad(waveform.samples, (0, 64))
@@ -96,24 +97,32 @@ def build_qls_lut(config: WaveformConfig, grid_points: int = 2001) -> QLSCalibra
         center_s=nominal_integer / config.sample_rate_hz,
         half_width_s=2.5 / config.sample_rate_hz,
     )
-    raw_fraction = np.empty(true_fraction.shape, dtype=np.float64)
-
-    for index, fraction in enumerate(true_fraction):
+    raw_fraction = np.empty(true_fraction_samples.shape, dtype=np.float64)
+    for index, fraction in enumerate(true_fraction_samples):
         received = apply_fractional_delay(
             tx_buffer,
-            delay_s=(nominal_integer + fraction) / config.sample_rate_hz,
+            delay_s=(nominal_integer + float(fraction)) / config.sample_rate_hz,
             sample_rate_hz=config.sample_rate_hz,
         )
         correlation = fft_matched_filter(received, waveform.samples)
         estimate = estimate_delay(correlation, config.sample_rate_hz, gate)
         if not estimate.qls_valid:
-            raise RuntimeError(f"LUT 网格 {index} 的 QLS 插值无效")
+            raise RuntimeError(f"分数时延网格 {index} 的 QLS 插值无效")
         relative = (
             estimate.integer_lag_samples
             - nominal_integer
             + estimate.fractional_offset_samples
         )
         raw_fraction[index] = float(wrap_fractional_sample(relative))
+    return raw_fraction
+
+
+def build_qls_lut(config: WaveformConfig, grid_points: int = 2001) -> QLSCalibration:
+    """用当前无噪声双音波形扫描一个完整分数样点周期。"""
+
+    signature = calibration_signature(config, grid_points)
+    true_fraction = np.linspace(-0.5, 0.5, grid_points, endpoint=False, dtype=np.float64)
+    raw_fraction = _estimate_fractional_grid(config, true_fraction)
 
     bias_by_scan = np.asarray(
         wrap_fractional_sample(raw_fraction - true_fraction), dtype=np.float64
@@ -151,6 +160,37 @@ def build_qls_lut(config: WaveformConfig, grid_points: int = 2001) -> QLSCalibra
         bias_samples=provisional.bias_samples,
         corrected_error_samples=corrected_error,
         grid_points=grid_points,
+    )
+
+
+def validate_qls_lut(
+    config: WaveformConfig,
+    calibration: QLSCalibration,
+    validation_points: int = 2000,
+) -> QLSValidation:
+    """在与 LUT 训练点错开的独立网格上运行完整 QLS/LUT 链路。"""
+
+    if validation_points < 5:
+        raise ValueError("validation_points 至少为 5")
+    step = 1.0 / validation_points
+    true_fraction = -0.5 + (np.arange(validation_points) + 0.5) * step
+    true_fraction = np.asarray(true_fraction, dtype=np.float64)
+    raw_fraction = _estimate_fractional_grid(config, true_fraction)
+    corrected_fraction = np.asarray(
+        correct_qls_fraction(raw_fraction, calibration), dtype=np.float64
+    )
+    raw_error = np.asarray(
+        wrap_fractional_sample(raw_fraction - true_fraction), dtype=np.float64
+    )
+    corrected_error = np.asarray(
+        wrap_fractional_sample(corrected_fraction - true_fraction), dtype=np.float64
+    )
+    return QLSValidation(
+        true_fraction_samples=true_fraction,
+        raw_fraction_samples=raw_fraction,
+        corrected_fraction_samples=corrected_fraction,
+        raw_error_samples=raw_error,
+        corrected_error_samples=corrected_error,
     )
 
 

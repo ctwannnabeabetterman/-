@@ -17,19 +17,45 @@ class ResultAcceptanceTests(unittest.TestCase):
         figures = root / "figures"
         figures.mkdir(parents=True)
         names: list[str] = []
-        for index in range(1, 11):
+        for index in range(1, 12):
             for suffix in ("png", "pdf"):
                 path = figures / f"{index:02d}_figure.{suffix}"
                 path.write_bytes(b"result")
                 names.append(str(path.relative_to(root)))
         (root / "manifest.json").write_text(
-            json.dumps({"figure_count": 20, "figures": names}), encoding="utf-8"
+            json.dumps({"figure_count": 22, "figures": names}), encoding="utf-8"
         )
         (root / "joint_tracking.csv").write_text("round,locked\n0,True\n", encoding="utf-8")
+        (root / "three_experiment_summary.csv").write_text(
+            "profile,snr_db\ncabled,36\n", encoding="utf-8"
+        )
+        (root / "three_experiment_samples.csv").write_text(
+            "profile,trial\ncabled,1\n", encoding="utf-8"
+        )
         summary = {
             "joint_tracking": {"steady_max_clock_error_ps": 5., "steady_max_arrival_error_ps": 5.,
                 "steady_max_phase_error_deg": 1., "locked_fraction": .99, "acquisition_failure_rate": 0.},
-            "lut": {"raw_rmse_ps": 20.0, "corrected_rmse_ps": 1.0},
+            "lut": {
+                "raw_rmse_ps": 20.0,
+                "corrected_rmse_ps": 1.0,
+                "validation_points": 400,
+                "validation_policy": "half-step grid disjoint from LUT training fractions",
+            },
+            "three_experiments": {
+                "profiles": {
+                    key: {
+                        "time_transfer_std_ps": 3.0,
+                        "beamforming_std_ps": 4.0,
+                        "residual_clock_rate_rmse_ppm": 0.001,
+                        "acquisition_failure_rate": 0.0,
+                    }
+                    for key in (
+                        "cabled",
+                        "wireless_time",
+                        "wireless_time_frequency",
+                    )
+                }
+            },
             "clock_tracking": {
                 "final_residual_after_update_ps": 2.0,
                 "estimated_fractional_frequency_offset": 2e-7,

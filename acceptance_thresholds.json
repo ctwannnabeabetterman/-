@@ -1,6 +1,6 @@
 {
-  "schema_version": 2,
-  "expected_figure_pairs": 10,
+  "schema_version": 3,
+  "expected_figure_pairs": 11,
   "max_clock_residual_ps": 20.0,
   "max_frequency_residual_fraction": 0.02,
   "min_full_sync_gain_vs_incoherent_db": 2.9,

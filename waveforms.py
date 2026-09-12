@@ -9,19 +9,6 @@ from config import WaveformConfig
 from models import Waveform
 
 
-def ideal_two_tone_line_spectrum(
-    config: WaveformConfig,
-) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """返回未门控双音的两个理想复基带谱线及归一化幅度。"""
-
-    half_separation_hz = config.tone_separation_hz / 2.0
-    frequencies_hz = np.array(
-        [-half_separation_hz, half_separation_hz], dtype=np.float64
-    )
-    normalized_magnitudes = np.ones(2, dtype=np.float64)
-    return frequencies_hz, normalized_magnitudes
-
-
 def raised_cosine_envelope(time_s: NDArray[np.float64], config: WaveformConfig) -> NDArray[np.float64]:
     """在给定秒制时间轴上生成分段升余弦脉冲包络。"""
 

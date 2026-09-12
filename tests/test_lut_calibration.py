@@ -16,6 +16,7 @@ from lut_calibration import (
     calibration_signature,
     correct_qls_fraction,
     load_or_build_lut,
+    validate_qls_lut,
     wrap_fractional_sample,
 )
 from waveforms import generate_two_tone
@@ -64,6 +65,21 @@ class QLSCalibrationTests(unittest.TestCase):
             0.05 * float(np.sqrt(np.mean(raw_error**2))),
         )
         self.assertLess(float(np.max(np.abs(corrected_error))), 5e-4)
+
+    def test_reported_lut_validation_uses_held_out_fractional_delays(self) -> None:
+        config = WaveformConfig(pulse_duration_s=1e-6)
+        calibration = build_qls_lut(config, grid_points=101)
+
+        validation = validate_qls_lut(config, calibration, validation_points=100)
+
+        rounded_training = set(np.round(calibration.true_fraction_samples, 12))
+        rounded_validation = set(np.round(validation.true_fraction_samples, 12))
+        self.assertTrue(rounded_training.isdisjoint(rounded_validation))
+        self.assertLess(validation.corrected_rmse_samples, validation.raw_rmse_samples)
+        self.assertLess(
+            validation.corrected_max_abs_error_samples,
+            validation.raw_max_abs_error_samples,
+        )
 
     def test_signature_changes_when_waveform_parameters_change(self) -> None:
         base = WaveformConfig(pulse_duration_s=1e-6)

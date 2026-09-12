@@ -38,6 +38,13 @@ def verify_output(
     beamforming = summary["beamforming"]
     monte_carlo = summary["monte_carlo_highest_snr"]
     joint = summary["joint_tracking"]
+    three_experiments = summary["three_experiments"]
+    experiment_profiles = three_experiments["profiles"]
+    expected_profile_keys = {
+        "cabled",
+        "wireless_time",
+        "wireless_time_frequency",
+    }
     plant = summary["state_separation"]["plant_at_data_epoch"]
     true_frequency_hz = abs(float(frequency["final_true_observed_offset_hz"]))
     residual_frequency_hz = abs(float(frequency["final_residual_hz"]))
@@ -47,6 +54,26 @@ def verify_output(
 
     checks = {
         "joint_table_present": (root / "joint_tracking.csv").is_file(),
+        "three_experiment_tables_present": (
+            (root / "three_experiment_summary.csv").is_file()
+            and (root / "three_experiment_samples.csv").is_file()
+        ),
+        "three_experiment_profiles_complete": set(experiment_profiles)
+        == expected_profile_keys,
+        "three_experiment_metrics_finite": all(
+            math.isfinite(float(profile[metric]))
+            for profile in experiment_profiles.values()
+            for metric in (
+                "time_transfer_std_ps",
+                "beamforming_std_ps",
+                "residual_clock_rate_rmse_ppm",
+            )
+        ),
+        "three_experiment_capture_success": all(
+            float(profile["acquisition_failure_rate"])
+            <= thresholds["max_acquisition_failure_rate"]
+            for profile in experiment_profiles.values()
+        ),
         "rx_arrival_aligned": abs(float(beamforming["full_sync"]["arrival_difference_ps"]))
             <= thresholds["max_arrival_error_ps"],
         "joint_clock_holdover": joint["steady_max_clock_error_ps"] <= thresholds["max_arrival_error_ps"],
@@ -61,6 +88,8 @@ def verify_output(
         and all(path.is_file() and path.stat().st_size > 0 for path in expected_files),
         "lut_reduces_systematic_rmse": float(lut["corrected_rmse_ps"])
         < float(lut["raw_rmse_ps"]),
+        "lut_uses_held_out_grid": int(lut["validation_points"]) > 0
+        and "disjoint" in str(lut["validation_policy"]),
         "monte_carlo_estimator_order": float(monte_carlo["qls_lut_rmse_ps"])
         < float(monte_carlo["qls_rmse_ps"])
         < float(monte_carlo["integer_peak_rmse_ps"]),
