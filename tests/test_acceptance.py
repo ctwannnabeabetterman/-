@@ -1,4 +1,4 @@
-"""机器可读 Demo 验收阈值测试。"""
+"""精简正式结果的机器可读验收测试。"""
 
 from __future__ import annotations
 
@@ -11,33 +11,39 @@ from verify_results import verify_output
 
 
 class ResultAcceptanceTests(unittest.TestCase):
-    """验证趋势、残差、增益和输出清单会共同决定验收结果。"""
-
     def _write_valid_result(self, root: Path) -> None:
         figures = root / "figures"
         figures.mkdir(parents=True)
         names: list[str] = []
-        for index in range(1, 12):
+        for stem in (
+            "01_system_signal_chain",
+            "02_qls_lut_validation",
+            "03_three_config_vs_crlb",
+            "04_model_mismatch_sensitivity",
+        ):
             for suffix in ("png", "pdf"):
-                path = figures / f"{index:02d}_figure.{suffix}"
+                path = figures / f"{stem}.{suffix}"
                 path.write_bytes(b"result")
                 names.append(str(path.relative_to(root)))
         (root / "manifest.json").write_text(
-            json.dumps({"figure_count": 22, "figures": names}), encoding="utf-8"
+            json.dumps(
+                {
+                    "schema_version": 4,
+                    "figure_count": 8,
+                    "figures": names,
+                    "tables": ["three_config_summary.csv"],
+                    "diagnostics": [],
+                }
+            ),
+            encoding="utf-8",
         )
-        (root / "joint_tracking.csv").write_text("round,locked\n0,True\n", encoding="utf-8")
-        (root / "three_experiment_summary.csv").write_text(
-            "profile,snr_db\ncabled,36\n", encoding="utf-8"
-        )
-        (root / "three_experiment_samples.csv").write_text(
-            "profile,trial\ncabled,1\n", encoding="utf-8"
+        (root / "three_config_summary.csv").write_text(
+            "case,snr_db\ncabled,36\n", encoding="utf-8"
         )
         summary = {
-            "joint_tracking": {"steady_max_clock_error_ps": 5., "steady_max_arrival_error_ps": 5.,
-                "steady_max_phase_error_deg": 1., "locked_fraction": .99, "acquisition_failure_rate": 0.},
             "lut": {
                 "raw_rmse_ps": 20.0,
-                "corrected_rmse_ps": 1.0,
+                "corrected_rmse_ps": 0.01,
                 "validation_points": 400,
                 "validation_policy": "half-step grid disjoint from LUT training fractions",
             },
@@ -78,17 +84,24 @@ class ResultAcceptanceTests(unittest.TestCase):
             "beamforming": {
                 "unsynchronized": {"combined_power": 1.0},
                 "full_sync": {
-                    "arrival_difference_ps": 2.,
+                    "arrival_difference_ps": 2.0,
                     "combined_power": 3.9,
                     "gain_vs_incoherent_sum_db": 3.0,
                     "normalized_ideal_loss_db": 0.001,
                 },
             },
             "monte_carlo_highest_snr": {
-                "acquisition_failure_rate": 0.,
+                "acquisition_failure_rate": 0.0,
                 "integer_peak_rmse_ps": 1400.0,
                 "qls_rmse_ps": 24.0,
                 "qls_lut_rmse_ps": 2.0,
+                "crlb_std_ps": 2.0,
+            },
+            "sensitivity": {
+                "max_abs_asymmetry_ps": 100.0,
+                "max_abs_clock_bias_ps": 50.0,
+                "max_reference_phase_noise_deg": 3.0,
+                "max_holdover_timing_rmse_ps": 900.0,
             },
         }
         (root / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
@@ -102,30 +115,28 @@ class ResultAcceptanceTests(unittest.TestCase):
         self.assertTrue(report["passed"])
         self.assertTrue(all(report["checks"].values()))
 
-    def test_excessive_full_sync_loss_fails_acceptance(self) -> None:
+    def test_missing_primary_table_fails_acceptance(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_valid_result(root)
-            summary_path = root / "summary.json"
-            summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            summary["beamforming"]["full_sync"]["normalized_ideal_loss_db"] = 1.0
-            summary_path.write_text(json.dumps(summary), encoding="utf-8")
+            (root / "three_config_summary.csv").unlink()
             report = verify_output(root)
 
         self.assertFalse(report["passed"])
-        self.assertFalse(report["checks"]["full_sync_ideal_loss"])
+        self.assertFalse(report["checks"]["primary_table_present"])
 
-    def test_good_snapshot_cannot_hide_holdover_loss(self) -> None:
+    def test_excessive_full_sync_loss_fails_acceptance(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_valid_result(root)
             path = root / "summary.json"
             summary = json.loads(path.read_text(encoding="utf-8"))
-            summary["joint_tracking"]["steady_max_arrival_error_ps"] = 500.
+            summary["beamforming"]["full_sync"]["normalized_ideal_loss_db"] = 1.0
             path.write_text(json.dumps(summary), encoding="utf-8")
             report = verify_output(root)
+
         self.assertFalse(report["passed"])
-        self.assertFalse(report["checks"]["joint_arrival_holdover"])
+        self.assertFalse(report["checks"]["full_sync_ideal_loss"])
 
 
 if __name__ == "__main__":

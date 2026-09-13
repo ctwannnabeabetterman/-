@@ -1,503 +1,405 @@
-"""论文风格的十一组 Demo 图；每组同时保存 PNG 和 PDF。"""
+"""正式报告的四张读者导向图；每张同时保存 PNG 与 PDF。"""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Sequence
 
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.font_manager as font_manager
 import matplotlib.pyplot as plt
 import numpy as np
 
-from experiments import reconstruct_raw_offset_estimate
+from config import FrequencySyncConfig
+from frequency_sync import frequency_transfer_rf_tones_hz
 from models import (
-    BeamformingResult,
-    ClockTrackingResult,
     CorrelationResult,
     DelayEstimate,
     MonteCarloResult,
     QLSCalibration,
     QLSValidation,
+    SensitivityResult,
     ThreeExperimentResult,
     Waveform,
 )
 
 
 _COLORS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00")
-_STATE_ORDER = ("unsynchronized", "time_only", "time_frequency", "full_sync")
-_STATE_LABELS = ("Unsynchronized", "Time", "Time + frequency", "Full sync")
 
 
 def configure_paper_style() -> None:
-    """配置白底、Times New Roman 和适合论文插图的线条字号。"""
+    """选择可显示中文的字体并设置适合报告阅读的绘图参数。"""
 
+    available = {font.name for font in font_manager.fontManager.ttflist}
+    family = next(
+        (
+            name
+            for name in ("Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "DejaVu Sans")
+            if name in available
+        ),
+        "DejaVu Sans",
+    )
     plt.rcParams.update(
         {
-            "font.family": "serif",
-            "font.serif": ["Times New Roman"],
+            "font.family": family,
             "font.size": 10,
             "axes.labelsize": 10,
             "axes.titlesize": 11,
-            "legend.fontsize": 9,
+            "legend.fontsize": 8.5,
             "figure.facecolor": "white",
             "axes.facecolor": "white",
             "axes.grid": True,
             "grid.alpha": 0.25,
             "axes.unicode_minus": False,
             "savefig.facecolor": "white",
+            "pdf.fonttype": 42,
         }
     )
 
 
 def save_figure(
-    fig: plt.Figure,
+    figure: plt.Figure,
     output_dir: str | Path,
     stem: str,
     *,
     tight_layout: bool = True,
 ) -> list[Path]:
-    """紧凑布局后把图保存为 180 dpi PNG 和矢量 PDF。"""
-
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
     if tight_layout:
-        fig.tight_layout()
+        figure.tight_layout()
     paths = [directory / f"{stem}.png", directory / f"{stem}.pdf"]
-    fig.savefig(paths[0], dpi=180, bbox_inches="tight")
-    fig.savefig(paths[1], bbox_inches="tight")
-    plt.close(fig)
+    figure.savefig(paths[0], dpi=200, bbox_inches="tight")
+    figure.savefig(paths[1], bbox_inches="tight")
+    plt.close(figure)
     return paths
 
 
-def plot_time_waveform(
+def _spectrum_db(samples: np.ndarray, sample_rate_hz: float) -> tuple[np.ndarray, np.ndarray]:
+    spectrum = np.fft.fftshift(np.fft.fft(np.asarray(samples, dtype=np.complex128)))
+    frequency_mhz = np.fft.fftshift(
+        np.fft.fftfreq(spectrum.size, d=1.0 / sample_rate_hz)
+    ) / 1e6
+    magnitude = np.abs(spectrum)
+    magnitude_db = 20.0 * np.log10(np.maximum(magnitude / np.max(magnitude), 1e-6))
+    return frequency_mhz, magnitude_db
+
+
+def plot_system_signal_chain(
     waveform: Waveform,
-    output_dir: str | Path,
-    *,
-    reply_interval_s: float = 50e-3,
-    sync_interval_s: float = 100e-3,
-) -> list[Path]:
-    """图 1：双音、单脉冲包络和重复双向同步协议时序。"""
-
-    configure_paper_style()
-    fig, (waveform_ax, envelope_ax, protocol_ax) = plt.subplots(
-        3, 1, figsize=(7.8, 7.2), gridspec_kw={"height_ratios": (1.4, 0.8, 0.9)}
-    )
-    time_us = waveform.time_s * 1e6
-    zoom_duration_us = min(0.6, float(time_us[-1]))
-    # 200 MSa/s 接收栅格足够用于估计，却不足以把 GHz/高 IF 波形画得
-    # 平滑。此处只为显示按同一公式在 2 GSa/s 细网格重算，不进入算法。
-    display_rate_hz = 2e9
-    display_time_s = np.arange(
-        int(np.floor(zoom_duration_us * 1e-6 * display_rate_hz)) + 1,
-        dtype=np.float64,
-    ) / display_rate_hz
-    spectral_axis_hz = np.fft.fftshift(
-        np.fft.fftfreq(waveform.samples.size, d=1.0 / waveform.sample_rate_hz)
-    )
-    spectral_peak_hz = abs(float(
-        spectral_axis_hz[np.argmax(np.abs(np.fft.fftshift(np.fft.fft(waveform.samples))))]
-    ))
-    display_envelope = np.interp(display_time_s, waveform.time_s, waveform.envelope)
-    display_complex_envelope = display_envelope * (
-        np.exp(-1j * 2.0 * np.pi * spectral_peak_hz * display_time_s)
-        + np.exp(+1j * 2.0 * np.pi * spectral_peak_hz * display_time_s)
-    )
-    center_if_hz = 100e6
-    real_if = np.real(
-        display_complex_envelope
-        * np.exp(1j * 2.0 * np.pi * center_if_hz * display_time_s)
-    )
-    scale = float(np.max(np.abs(real_if)))
-    waveform_ax.plot(display_time_s * 1e6, real_if, color=_COLORS[0], lw=0.8)
-    waveform_ax.plot(
-        display_time_s * 1e6, display_envelope * scale,
-        "k--", lw=0.8, label="± envelope: 50 ns raised-cosine edges",
-    )
-    waveform_ax.plot(
-        display_time_s * 1e6, -display_envelope * scale, "k--", lw=0.8
-    )
-    waveform_ax.axhline(0.0, color="black", lw=0.6)
-    waveform_ax.set(
-        ylabel="Real amplitude",
-        title=(
-            f"One transmitted pulse, first {zoom_duration_us:.1f} µs: "
-            "5.780/5.820 GHz tones shown at 80/120 MHz display IF"
-        ),
-    )
-    waveform_ax.legend(loc="upper right")
-
-    envelope_ax.plot(
-        time_us, waveform.envelope, color=_COLORS[1], lw=1.2,
-        label="One 10 µs pulse used by one link measurement",
-    )
-    envelope_ax.set(
-        xlabel="Time (µs)",
-        ylabel="Envelope",
-        ylim=(-0.05, 1.1),
-        title="10 µs single pulse; raised-cosine shaping only on the 50 ns edges",
-    )
-    envelope_ax.legend(loc="lower center")
-
-    epoch_starts_ms = np.arange(3, dtype=np.float64) * sync_interval_s * 1e3
-    replies_ms = epoch_starts_ms + reply_interval_s * 1e3
-    protocol_ax.vlines(
-        epoch_starts_ms,
-        0.0,
-        1.0,
-        color=_COLORS[0],
-        lw=2.0,
-        label="AP1→AP0: one 10 µs pulse",
-    )
-    protocol_ax.scatter(epoch_starts_ms, np.ones(3), color=_COLORS[0], s=22)
-    protocol_ax.vlines(
-        replies_ms,
-        0.0,
-        -1.0,
-        color=_COLORS[1],
-        lw=2.0,
-        label="AP0→AP1 reply: one 10 µs pulse",
-    )
-    protocol_ax.scatter(replies_ms, -np.ones(3), color=_COLORS[1], s=22)
-    protocol_ax.axhline(0.0, color="black", lw=0.6)
-    protocol_ax.set(
-        xlim=(-5.0, replies_ms[-1] + 5.0),
-        ylim=(-1.25, 1.25),
-        xlabel="Protocol time (ms)",
-        ylabel="Direction",
-        yticks=(-1.0, 1.0),
-        yticklabels=("reply", "request"),
-        title=(
-            "Repeated synchronization epochs: 50 ms reply interval, "
-            "100 ms resynchronization interval"
-        ),
-    )
-    protocol_ax.legend(loc="upper center", ncol=2, fontsize=8)
-    return save_figure(fig, output_dir, "01_two_tone_time_waveform")
-
-
-def plot_spectrum(
-    waveform: Waveform,
+    frequency_config: FrequencySyncConfig,
     received_samples: Sequence[complex] | np.ndarray,
     output_dir: str | Path,
 ) -> list[Path]:
-    """图 2：由公式 TX 样点和链路 RX 样点实际计算双音频谱。"""
+    """图 01：三条链路、有限双音脉冲及由实际 IQ 计算的频谱。"""
 
     configure_paper_style()
-    rx = np.asarray(received_samples, dtype=np.complex128)
-    if rx.ndim != 1 or rx.size == 0 or not np.all(np.isfinite(rx)):
-        raise ValueError("received_samples 必须为非空一维有限复数组")
+    received = np.asarray(received_samples, dtype=np.complex128)
+    if received.ndim != 1 or received.size == 0 or not np.all(np.isfinite(received)):
+        raise ValueError("received_samples 必须为非空一维有限复数数组")
 
-    def spectrum_db(samples: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        spectrum = np.fft.fftshift(np.fft.fft(samples))
-        frequency_mhz = np.fft.fftshift(
-            np.fft.fftfreq(samples.size, d=1.0 / waveform.sample_rate_hz)
-        ) / 1e6
-        magnitude = np.abs(spectrum)
-        magnitude_db = 20.0 * np.log10(
-            np.maximum(magnitude / np.max(magnitude), 1e-6)
-        )
-        return frequency_mhz, magnitude_db
+    figure, axes = plt.subplots(2, 2, figsize=(11.2, 7.2))
+    if_axis, envelope_axis, spectrum_axis, chain_axis = axes.reshape(-1)
 
-    tx_frequency_mhz, tx_db = spectrum_db(waveform.samples)
-    rx_frequency_mhz, rx_db = spectrum_db(rx)
-    fig, ax = plt.subplots(figsize=(7.2, 3.9))
-    ax.plot(
-        tx_frequency_mhz,
-        tx_db,
-        color=_COLORS[0],
-        lw=0.9,
-        label="TX 5.780/5.820 GHz two-tone pulse (complex envelope)",
+    display_rate_hz = 2e9
+    display_duration_s = min(0.6e-6, float(waveform.time_s[-1]))
+    display_time_s = np.arange(
+        int(np.floor(display_duration_s * display_rate_hz)) + 1,
+        dtype=np.float64,
+    ) / display_rate_hz
+    envelope = np.interp(display_time_s, waveform.time_s, waveform.envelope)
+    half_separation_hz = 0.5 * 40e6
+    display_if_hz = 100e6
+    display_signal = envelope * np.real(
+        np.exp(1j * 2 * np.pi * (display_if_hz - half_separation_hz) * display_time_s)
+        + np.exp(1j * 2 * np.pi * (display_if_hz + half_separation_hz) * display_time_s)
     )
-    ax.plot(
+    display_signal /= np.max(np.abs(display_signal))
+    if_axis.plot(display_time_s * 1e6, display_signal, color=_COLORS[0], lw=0.9)
+    if_axis.plot(display_time_s * 1e6, envelope, "k--", lw=0.8, label="± 包络")
+    if_axis.plot(display_time_s * 1e6, -envelope, "k--", lw=0.8)
+    if_axis.set(
+        xlabel="时间 (µs)",
+        ylabel="归一化实幅度",
+        title="(a) 40 MHz 双音时域示意：80/120 MHz 显示中频",
+    )
+    if_axis.legend(loc="upper right")
+
+    envelope_axis.plot(waveform.time_s * 1e6, waveform.envelope, color=_COLORS[1], lw=1.2)
+    envelope_axis.set(
+        xlabel="时间 (µs)",
+        ylabel="包络",
+        ylim=(-0.05, 1.08),
+        title="(b) 每次链路测量只发送一个 10 µs 脉冲",
+    )
+    envelope_axis.annotate(
+        "50 ns 升沿",
+        xy=(0.05, 1.0),
+        xytext=(0.7, 0.55),
+        arrowprops={"arrowstyle": "->", "lw": 0.8},
+    )
+
+    tx_frequency_mhz, tx_db = _spectrum_db(waveform.samples, waveform.sample_rate_hz)
+    rx_frequency_mhz, rx_db = _spectrum_db(received, waveform.sample_rate_hz)
+    spectrum_axis.plot(tx_frequency_mhz, tx_db, color=_COLORS[0], lw=1.0, label="发送 IQ")
+    spectrum_axis.plot(
         rx_frequency_mhz,
         rx_db,
         color=_COLORS[1],
         lw=0.8,
         alpha=0.75,
-        label="RX IQ after propagation delay and AWGN",
+        label="传播、噪声与接收采样后的 IQ",
     )
-    ax.set(
-        xlim=(-50.0, 50.0),
-        ylim=(-105.0, 3.0),
-        xlabel="Frequency offset from 5.8 GHz carrier (MHz)",
-        ylabel="Normalized magnitude (dB)",
-        title="5.8 GHz synchronization signal: two RF tones spaced by 40 MHz",
+    spectrum_axis.set(
+        xlim=(-35.0, 35.0),
+        ylim=(-100.0, 3.0),
+        xlabel="相对 5.8 GHz 载频的频率 (MHz)",
+        ylabel="归一化幅度 (dB)",
+        title="(c) 实际有限 IQ 的 FFT：谱峰位于 ±20 MHz",
     )
-    ax.annotate("5.780 GHz", xy=(-20.0, 0.0), xytext=(-32.0, -12.0),
-                arrowprops={"arrowstyle": "->", "lw": 0.8})
-    ax.annotate("5.820 GHz", xy=(20.0, 0.0), xytext=(24.0, -12.0),
-                arrowprops={"arrowstyle": "->", "lw": 0.8})
-    ax.legend(loc="lower center", ncol=2)
-    return save_figure(fig, output_dir, "02_two_tone_spectrum")
+    spectrum_axis.axvline(-20.0, color="black", ls=":", lw=0.7)
+    spectrum_axis.axvline(20.0, color="black", ls=":", lw=0.7)
+    spectrum_axis.legend(loc="lower center")
+
+    low_hz, high_hz = frequency_transfer_rf_tones_hz(frequency_config)
+    chain_axis.axis("off")
+    chain_axis.set_title("(d) 三条信号链及其用途")
+    rows = (
+        (
+            "时间传递",
+            "5.8 GHz ± 20 MHz\n40 MHz 间隔，10 µs 脉冲",
+            "IQ → 匹配滤波 → QLS → LUT → 四时间戳",
+        ),
+        (
+            "频率传递",
+            f"{low_hz / 1e9:.3f}/{high_hz / 1e9:.3f} GHz 连续双音",
+            "自混频 → 10 MHz 参考 → 采样钟速率估计",
+        ),
+        (
+            "下游验证",
+            "1.2 GHz，50 MHz 双音脉冲",
+            "时间/频率/相位估计 → 两 AP 相干合成",
+        ),
+    )
+    for row_index, (purpose, signal, processing) in enumerate(rows):
+        y = 0.82 - row_index * 0.32
+        chain_axis.text(0.02, y, purpose, weight="bold", transform=chain_axis.transAxes)
+        chain_axis.text(0.24, y, signal, transform=chain_axis.transAxes, va="center")
+        chain_axis.text(0.63, y, processing, transform=chain_axis.transAxes, va="center")
+        chain_axis.annotate(
+            "",
+            xy=(0.61, y),
+            xytext=(0.57, y),
+            xycoords=chain_axis.transAxes,
+            arrowprops={"arrowstyle": "->", "lw": 0.9},
+        )
+    chain_axis.text(
+        0.02,
+        0.02,
+        "说明：4.3/5.8 GHz 是 RF 参数；200 MSa/s 下的计算在等效复基带完成。",
+        transform=chain_axis.transAxes,
+        color="dimgray",
+    )
+
+    figure.suptitle("分布式相干同步 Demo：信号、参数与处理链", fontsize=13)
+    figure.subplots_adjust(top=0.91)
+    return save_figure(figure, output_dir, "01_system_signal_chain")
 
 
-def plot_correlation_qls(
+def plot_qls_lut_validation(
     correlation: CorrelationResult,
     estimate: DelayEstimate,
+    calibration: QLSCalibration,
+    validation: QLSValidation,
+    monte_carlo: MonteCarloResult,
     sample_rate_hz: float,
     output_dir: str | Path,
 ) -> list[Path]:
-    """图 3：匹配滤波峰值的三个样点与 QLS 抛物线。"""
+    """图 02：QLS、LUT 确定性校准与带噪性能证据。"""
 
     configure_paper_style()
+    figure, axes = plt.subplots(1, 3, figsize=(12.0, 3.9))
+    peak_axis, lut_axis, rmse_axis = axes
+
     peak = estimate.peak_array_index
     lower = max(0, peak - 3)
     upper = min(correlation.magnitude.size, peak + 4)
-    x_samples = correlation.lags_samples[lower:upper].astype(np.float64)
-    scale = float(correlation.magnitude[peak])
-    y = 20.0 * np.log10(
-        np.maximum(correlation.magnitude[lower:upper] / scale, 1e-15)
-    )
+    x = correlation.lags_samples[lower:upper].astype(np.float64)
+    reference = float(correlation.magnitude[peak])
+    y = 20 * np.log10(np.maximum(correlation.magnitude[lower:upper] / reference, 1e-15))
     local_x = correlation.lags_samples[peak - 1 : peak + 2].astype(np.float64)
-    local_y = 20.0 * np.log10(
-        np.maximum(correlation.magnitude[peak - 1 : peak + 2] / scale, 1e-15)
+    local_y = 20 * np.log10(
+        np.maximum(correlation.magnitude[peak - 1 : peak + 2] / reference, 1e-15)
     )
     coefficients = np.polyfit(local_x, local_y, 2)
     dense_x = np.linspace(local_x[0], local_x[-1], 300)
-
-    fig, ax = plt.subplots(figsize=(7.2, 3.8))
-    ax.plot(x_samples, y, "o-", color=_COLORS[0], label="Matched-filter samples")
-    ax.plot(dense_x, np.polyval(coefficients, dense_x), color=_COLORS[1], lw=1.4, label="Three-point QLS parabola")
-    qls_samples = estimate.integer_lag_samples + estimate.fractional_offset_samples
-    ax.axvline(qls_samples, color=_COLORS[2], ls="--", label=f"QLS = {qls_samples:.4f} samples")
-    ax.set(
-        xlabel=f"Delay lag (samples at {sample_rate_hz / 1e6:.0f} MSa/s)",
-        ylabel="Matched-filter magnitude (dB, peak normalized)",
-        title="Matched-filter peak and log-magnitude QLS fit",
+    peak_axis.plot(x, y, "o", color=_COLORS[0], label="匹配滤波离散样点")
+    peak_axis.plot(dense_x, np.polyval(coefficients, dense_x), color=_COLORS[1], label="三点对数幅度 QLS")
+    peak_axis.axvline(
+        estimate.integer_lag_samples + estimate.fractional_offset_samples,
+        color=_COLORS[2],
+        ls="--",
+        label="亚样点峰值",
     )
-    ax.legend(loc="best")
-    return save_figure(fig, output_dir, "03_matched_filter_qls")
+    peak_axis.set(
+        xlabel="时延栅格 (sample)",
+        ylabel="相对峰值 (dB)",
+        title="(a) 5 ns 栅格内的 QLS 插值",
+    )
+    peak_axis.legend(loc="lower center")
 
-
-def plot_lut_bias(
-    calibration: QLSCalibration,
-    validation: QLSValidation,
-    sample_rate_hz: float,
-    output_dir: str | Path,
-) -> list[Path]:
-    """图 4：训练 LUT 与独立分数时延验证集上的校正结果。"""
-
-    configure_paper_style()
-    training_error = (
-        (calibration.raw_fraction_samples - calibration.true_fraction_samples + 0.5) % 1.0
-        - 0.5
-    ) / sample_rate_hz * 1e12
-    validation_raw = validation.raw_error_samples / sample_rate_hz * 1e12
-    validation_corrected = validation.corrected_error_samples / sample_rate_hz * 1e12
-    fig, axes = plt.subplots(2, 1, figsize=(7.2, 5.6), sharex=True)
-    axes[0].plot(
-        calibration.true_fraction_samples,
-        training_error,
+    raw_bias_ps = validation.raw_error_samples / sample_rate_hz * 1e12
+    corrected_bias_ps = validation.corrected_error_samples / sample_rate_hz * 1e12
+    lut_axis.plot(
+        validation.true_fraction_samples,
+        raw_bias_ps,
+        color=_COLORS[0],
+        lw=1.0,
+        label="原始 QLS 系统偏差",
+    )
+    lut_axis.plot(
+        validation.true_fraction_samples,
+        corrected_bias_ps,
         color=_COLORS[1],
         lw=1.0,
-        label="LUT training scan: raw QLS bias",
+        label="LUT 校正残差",
     )
-    axes[0].plot(
-        validation.true_fraction_samples,
-        validation_raw,
+    lut_axis.set(
+        xlabel="真实分数时延 (sample)",
+        ylabel="无噪声偏差 (ps)",
+        title="(b) 独立栅格上的确定性插值检查",
+    )
+    lut_axis.legend(loc="lower center")
+
+    rmse_axis.semilogy(
+        monte_carlo.snr_db,
+        monte_carlo.integer_peak_rmse_s * 1e12,
+        "^-",
         color=_COLORS[3],
-        lw=0.8,
-        alpha=0.8,
-        label="Held-out delays: raw QLS bias",
+        label="整数峰",
     )
-    axes[0].set(ylabel="Error (ps)", title="QLS periodic bias before LUT correction")
-    axes[0].legend(loc="best")
-    axes[1].plot(
-        validation.true_fraction_samples,
-        validation_corrected,
-        color=_COLORS[2],
-        lw=1.0,
-        label="Held-out delays after LUT",
+    rmse_axis.semilogy(
+        monte_carlo.snr_db,
+        monte_carlo.qls_rmse_s * 1e12,
+        "s-",
+        color=_COLORS[0],
+        label="QLS",
     )
-    axes[1].axhline(0.0, color="black", lw=0.8)
-    axes[1].set(
-        xlabel="True fractional delay (samples)",
-        ylabel="Error (ps)",
-        title="Independent validation after LUT correction",
+    rmse_axis.semilogy(
+        monte_carlo.snr_db,
+        monte_carlo.lut_rmse_s * 1e12,
+        "o-",
+        color=_COLORS[1],
+        label="QLS + LUT",
     )
-    axes[1].legend(loc="best")
-    return save_figure(fig, output_dir, "04_qls_lut_bias")
-
-
-def plot_rmse_crlb(result: MonteCarloResult, output_dir: str | Path) -> list[Path]:
-    """图 5：三种时延估计 RMSE 和双音 CRLB 随 SNR 变化。"""
-
-    configure_paper_style()
-    fig, ax = plt.subplots(figsize=(7.2, 4.2))
-    curves = (
-        (result.integer_peak_rmse_s, "Integer peak", _COLORS[3], "o"),
-        (result.qls_rmse_s, "QLS", _COLORS[1], "s"),
-        (result.lut_rmse_s, "QLS + LUT", _COLORS[0], "^"),
-        (result.crlb_std_s, "CRLB", "black", "x"),
-        (result.clock_offset_rmse_s, "Two-way clock offset", _COLORS[2], "d"),
+    rmse_axis.semilogy(
+        monte_carlo.snr_db,
+        monte_carlo.crlb_std_s * 1e12,
+        "k--",
+        lw=1.1,
+        label="CRLB",
     )
-    for values, label, color, marker in curves:
-        ax.semilogy(result.snr_db, values * 1e12, marker=marker, color=color, lw=1.2, label=label)
-    ax.set(xlabel="Active-sample SNR (dB)", ylabel="RMSE / standard deviation (ps)", title="Delay estimation accuracy and CRLB")
-    ax.legend(loc="best", ncol=2)
-    return save_figure(fig, output_dir, "05_delay_rmse_crlb")
-
-
-def plot_clock_tracking(result: ClockTrackingResult, output_dir: str | Path) -> list[Path]:
-    """图 6：AP1 真钟差、双向估计和补偿后残差。"""
-
-    configure_paper_style()
-    rounds = np.arange(1, result.raw_offset_s.size + 1)
-    cumulative_raw_offset_estimate_s = reconstruct_raw_offset_estimate(result)
-    fig, axes = plt.subplots(2, 1, figsize=(7.2, 5.5), sharex=True)
-    axes[0].plot(rounds, result.raw_offset_s * 1e12, "o-", color=_COLORS[3], label="True raw offset")
-    axes[0].plot(rounds, cumulative_raw_offset_estimate_s * 1e12, "s-", color=_COLORS[0], label="Cumulative two-way estimate")
-    axes[0].set(ylabel="Clock offset (ps)", title="AP1 clock-offset tracking")
-    axes[0].legend(loc="best")
-    axes[1].plot(rounds, result.residual_after_s * 1e12, "^-", color=_COLORS[2], label="Residual after update")
-    axes[1].axhline(0.0, color="black", lw=0.8)
-    axes[1].set(xlabel="Synchronization round", ylabel="Residual offset (ps)")
-    axes[1].legend(loc="best")
-    return save_figure(fig, output_dir, "06_clock_offset_tracking")
-
-
-def plot_frequency_tracking(
-    true_hz: Sequence[float],
-    measured_hz: Sequence[float],
-    tracked_hz: Sequence[float],
-    output_dir: str | Path,
-) -> list[Path]:
-    """图 7：真实、单次估计、指数跟踪和残余频偏。"""
-
-    configure_paper_style()
-    true_values = np.asarray(true_hz, dtype=np.float64)
-    measured_values = np.asarray(measured_hz, dtype=np.float64)
-    tracked_values = np.asarray(tracked_hz, dtype=np.float64)
-    rounds = np.arange(1, true_values.size + 1)
-    fig, axes = plt.subplots(2, 1, figsize=(7.2, 5.6), sharex=True)
-    axes[0].plot(rounds, true_values, "k-", lw=1.4, label="True observed offset")
-    axes[0].plot(rounds, measured_values, "o", color=_COLORS[1], label="Single estimate")
-    axes[0].plot(rounds, tracked_values, "s-", color=_COLORS[0], label="Exponential tracker")
-    axes[0].set(ylabel="Frequency offset (Hz)", title="Software-equivalent frequency synchronization")
-    axes[0].legend(loc="best", ncol=3)
-    axes[1].plot(rounds, true_values - tracked_values, "d-", color=_COLORS[2])
-    axes[1].axhline(0.0, color="black", lw=0.8)
-    axes[1].set(xlabel="Synchronization round", ylabel="Residual offset (Hz)")
-    return save_figure(fig, output_dir, "07_frequency_tracking")
-
-
-def plot_received_waveforms(
-    states: Mapping[str, BeamformingResult],
-    sample_rate_hz: float,
-    output_dir: str | Path,
-) -> list[Path]:
-    """图 8：RX 未同步与完整同步时合成复包络实部。"""
-
-    configure_paper_style()
-    unsync = states["unsynchronized"].received_samples
-    full = states["full_sync"].received_samples
-    time_unsync_us = np.arange(unsync.size, dtype=np.float64) / sample_rate_hz * 1e6
-    time_full_us = np.arange(full.size, dtype=np.float64) / sample_rate_hz * 1e6
-    fig, ax = plt.subplots(figsize=(7.2, 3.9))
-    ax.plot(time_unsync_us, unsync.real, color=_COLORS[1], lw=0.9, alpha=0.85, label="Unsynchronized")
-    ax.plot(time_full_us, full.real, color=_COLORS[0], lw=0.9, alpha=0.85, label="Full synchronization")
-    ax.set(xlabel="Receiver sample time (µs)", ylabel="Combined in-phase amplitude", title="Received coherent waveform")
-    ax.legend(loc="upper right")
-    return save_figure(fig, output_dir, "08_received_waveforms")
-
-
-def plot_coherent_gain(
-    states: Mapping[str, BeamformingResult], output_dir: str | Path
-) -> list[Path]:
-    """图 9：四种同步状态相对非相干功率和的相干增益。"""
-
-    configure_paper_style()
-    values = [states[name].metrics.gain_vs_incoherent_sum_db for name in _STATE_ORDER]
-    fig, ax = plt.subplots(figsize=(7.2, 4.0))
-    bars = ax.bar(_STATE_LABELS, values, color=_COLORS[:4])
-    ax.axhline(10.0 * np.log10(2.0), color="black", ls="--", lw=1.0, label="Ideal = 3.01 dB")
-    ax.bar_label(bars, fmt="%.2f dB", padding=3)
-    ax.set(ylabel="Gain over incoherent power sum (dB)", title="Coherent gain under four synchronization states")
-    ax.tick_params(axis="x", rotation=12)
-    ax.legend(loc="best")
-    return save_figure(fig, output_dir, "09_four_state_coherent_gain")
-
-
-def plot_residual_summary(
-    states: Mapping[str, BeamformingResult], output_dir: str | Path
-) -> list[Path]:
-    """图 10：四状态残余到达、频率和相位误差分量。"""
-
-    configure_paper_style()
-    floor = 1e-6
-    time_ps = [max(abs(states[name].residual_arrival_difference_s * 1e12), floor) for name in _STATE_ORDER]
-    frequency_hz = [max(abs(states[name].residual_frequency_offset_hz), floor) for name in _STATE_ORDER]
-    phase_deg = [max(abs(np.rad2deg(states[name].residual_phase_difference_rad)), floor) for name in _STATE_ORDER]
-    fig, axes = plt.subplots(3, 1, figsize=(7.2, 7.0), sharex=True)
-    datasets = (
-        (time_ps, "|Arrival difference| (ps)", _COLORS[3]),
-        (frequency_hz, "|Residual frequency| (Hz)", _COLORS[1]),
-        (phase_deg, "|Residual phase| (deg)", _COLORS[0]),
+    rmse_axis.set(
+        xlabel="活动区复 AWGN SNR (dB)",
+        ylabel="时延 RMSE (ps)",
+        title="(c) 带噪 Monte Carlo 才是性能结果",
     )
-    for axis, (values, ylabel, color) in zip(axes, datasets):
-        axis.bar(_STATE_LABELS, values, color=color, alpha=0.85)
-        axis.set_yscale("log")
-        axis.set_ylabel(ylabel)
-    axes[0].set_title("Residual synchronization errors")
-    axes[-1].tick_params(axis="x", rotation=12)
-    return save_figure(fig, output_dir, "10_residual_error_summary")
+    rmse_axis.legend(loc="lower left")
+
+    figure.suptitle("QLS 与 LUT：从采样栅格到皮秒级时延估计", fontsize=13)
+    figure.subplots_adjust(top=0.84)
+    return save_figure(figure, output_dir, "02_qls_lut_validation")
 
 
-def plot_three_experiment_precision(
+def plot_three_config_vs_crlb(
     result: ThreeExperimentResult,
     output_dir: str | Path,
 ) -> list[Path]:
-    """论文 Fig. 12 风格：三种配置的时间与脉冲到达精度。"""
+    """图 03：论文三种配置的软件等效时间同步结果与 CRLB。"""
 
     configure_paper_style()
-    fig, axes = plt.subplots(
-        1,
-        3,
-        figsize=(11.2, 3.7),
-        sharey=True,
-        gridspec_kw={"wspace": 0.05},
+    figure, axis = plt.subplots(figsize=(7.8, 4.8))
+    markers = ("o", "s", "^")
+    labels = ("有线时间 + 有线频率", "无线时间 + 有线频率", "无线时间 + 无线频率")
+    for index, label in enumerate(labels):
+        axis.semilogy(
+            result.snr_db,
+            result.time_transfer_std_s[index] * 1e12,
+            marker=markers[index],
+            color=_COLORS[index],
+            lw=1.3,
+            label=label,
+        )
+    axis.semilogy(
+        result.snr_db,
+        result.crlb_std_s * 1e12,
+        "k--",
+        lw=1.3,
+        label="CRLB（同一仿真 SNR 定义）",
     )
-    for profile_index, (axis, label) in enumerate(
-        zip(axes, result.profile_labels)
-    ):
-        axis.semilogy(
-            result.snr_db,
-            result.time_transfer_std_s[profile_index] * 1e12,
-            "o-",
-            color=_COLORS[0],
-            lw=1.2,
-            label="Two-way time transfer",
-        )
-        axis.semilogy(
-            result.snr_db,
-            result.beamforming_std_s[profile_index] * 1e12,
-            "s--",
-            color=_COLORS[1],
-            lw=1.2,
-            label="RX pulse interarrival",
-        )
-        axis.semilogy(
-            result.snr_db,
-            result.crlb_best_case_std_s * 1e12,
-            ":",
-            color="black",
-            lw=1.2,
-            label="CRLB at SNR + 3 dB",
-        )
-        axis.set(
-            xlabel=f"Time-transfer SNR (dB)\n({chr(97 + profile_index)})",
-            title=label,
-        )
-        axis.tick_params(which="both", direction="in")
-    axes[0].set_ylabel("Sample standard deviation (ps)")
-    axes[2].legend(loc="upper right", frameon=False, fontsize=8)
-    fig.suptitle("Three communication-chain synchronization experiments")
-    fig.subplots_adjust(top=0.80, bottom=0.22, left=0.07, right=0.99)
-    return save_figure(
-        fig,
-        output_dir,
-        "12_paper_figure12_three_experiment_precision",
-        tight_layout=False,
+    axis.set(
+        xlabel="时间传递接收端活动区复 AWGN SNR (dB)",
+        ylabel="双向时间同步标准差 (ps)",
+        title="论文三种配置的软件等效仿真与 CRLB",
     )
+    axis.legend(loc="upper right")
+    axis.text(
+        0.01,
+        0.02,
+        "每点独立运行完整 IQ→匹配滤波→QLS→LUT→四时间戳链路；曲线不是硬件测量值。",
+        transform=axis.transAxes,
+        color="dimgray",
+    )
+    return save_figure(figure, output_dir, "03_three_config_vs_crlb")
+
+
+def plot_model_mismatch_sensitivity(
+    result: SensitivityResult,
+    output_dir: str | Path,
+) -> list[Path]:
+    """图 04：双向不对称和参考相位扰动的受控敏感性。"""
+
+    configure_paper_style()
+    figure, (asymmetry_axis, phase_axis) = plt.subplots(1, 2, figsize=(10.2, 4.1))
+    asymmetry_ps = result.path_asymmetry_s * 1e12
+    asymmetry_axis.errorbar(
+        asymmetry_ps,
+        result.clock_bias_s * 1e12,
+        yerr=result.clock_std_s * 1e12,
+        fmt="o-",
+        color=_COLORS[0],
+        capsize=3,
+        label="完整四时间戳仿真",
+    )
+    asymmetry_axis.plot(
+        asymmetry_ps,
+        0.5 * asymmetry_ps,
+        "k--",
+        label="理论：偏差 = 不对称量 / 2",
+    )
+    asymmetry_axis.set(
+        xlabel="上行时延 − 下行时延 (ps)",
+        ylabel="估计钟差偏差 (ps)",
+        title="(a) 双向链路不对称",
+    )
+    asymmetry_axis.legend(loc="upper left")
+
+    phase_axis.semilogy(
+        np.rad2deg(result.reference_phase_noise_rad),
+        result.holdover_timing_rmse_s * 1e12,
+        "o-",
+        color=_COLORS[1],
+        label="100 ms 后时序漂移 RMSE",
+    )
+    phase_axis.set(
+        xlabel="两个 10 MHz 观测窗口的相位扰动标准差 (°)",
+        ylabel="保持期时序漂移 RMSE (ps)",
+        title="(b) 无线频率参考相位扰动",
+    )
+    phase_axis.legend(loc="upper left")
+
+    figure.suptitle("仿真扩展：模型假设失配会怎样影响同步", fontsize=13)
+    figure.subplots_adjust(top=0.84)
+    return save_figure(figure, output_dir, "04_model_mismatch_sensitivity")

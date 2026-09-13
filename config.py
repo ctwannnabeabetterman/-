@@ -392,36 +392,48 @@ class ThreeExperimentConfig:
 
 
 @dataclass(frozen=True)
-class JointTrackingConfig:
-    """持续联合同步、漂移、掉帧及锁定判据。"""
+class SensitivityConfig:
+    """双向不对称与 10 MHz 参考相位扰动的受控仿真参数。"""
 
-    rounds: int = 100
-    interval_s: float = 50e-3
-    seed: int = 42023
-    clock_rate_walk_std: float = 1e-12
-    oscillator_walk_std_hz: float = 0.02
-    holdover_points: int = 9
-    rate_fit_window: int = 8
-    max_arrival_error_s: float = 20e-12
-    max_phase_error_rad: float = 0.1
-    min_gain_db: float = 2.9
-    dropout_rounds: tuple[int, ...] = ()
-    frequency_step_round: int | None = None
-    frequency_step_hz: float = 100.0
+    asymmetry_ps: tuple[float, ...] = (-100.0, -50.0, 0.0, 50.0, 100.0)
+    reference_phase_noise_deg: tuple[float, ...] = (0.0, 0.1, 0.3, 1.0, 3.0)
+    trials: int = 300
+    seed: int = 91723
+    base_propagation_delay_s: float = 50e-9
+    time_link_snr_db: float = 60.0
+    frequency_reference_snr_db: float = 60.0
+    frequency_capture_duration_s: float = 40e-6
+    frequency_reference_hz: float = 10e6
+    true_clock_rate_offset: float = 0.2e-6
+    sync_interval_s: float = 100e-3
 
     def __post_init__(self) -> None:
-        if self.rounds < 3 or self.holdover_points < 2 or self.rate_fit_window < 2:
-            raise ValueError("联合跟踪至少三轮、每周期至少两个保持观测点")
-        values = (self.interval_s, self.clock_rate_walk_std, self.oscillator_walk_std_hz,
-                  self.max_arrival_error_s, self.max_phase_error_rad, self.min_gain_db,
-                  self.frequency_step_hz)
-        if not all(math.isfinite(v) for v in values):
-            raise ValueError("联合跟踪参数必须有限")
-        if min(self.interval_s, self.max_arrival_error_s, self.max_phase_error_rad) <= 0:
-            raise ValueError("周期和锁定误差阈值必须为正")
-        if min(self.clock_rate_walk_std, self.oscillator_walk_std_hz) < 0:
-            raise ValueError("随机游走标准差不能为负")
-        if any(i < 0 or i >= self.rounds for i in self.dropout_rounds):
-            raise ValueError("掉帧轮次超出范围")
-        if self.frequency_step_round is not None and not 0 <= self.frequency_step_round < self.rounds:
-            raise ValueError("频偏突变轮次超出范围")
+        values = (
+            *self.asymmetry_ps,
+            *self.reference_phase_noise_deg,
+            self.base_propagation_delay_s,
+            self.time_link_snr_db,
+            self.frequency_reference_snr_db,
+            self.frequency_capture_duration_s,
+            self.frequency_reference_hz,
+            self.true_clock_rate_offset,
+            self.sync_interval_s,
+        )
+        if not self.asymmetry_ps or not self.reference_phase_noise_deg:
+            raise ValueError("敏感性扫描轴不能为空")
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("敏感性参数必须为有限数")
+        if self.trials < 2:
+            raise ValueError("敏感性扫描每点至少需要两个试验")
+        if min(
+            self.base_propagation_delay_s,
+            self.frequency_capture_duration_s,
+            self.frequency_reference_hz,
+            self.sync_interval_s,
+        ) <= 0.0:
+            raise ValueError("敏感性扫描的时间和频率参数必须为正")
+        if any(value < 0.0 for value in self.reference_phase_noise_deg):
+            raise ValueError("参考相位扰动标准差不能为负")
+        max_asymmetry_s = max(abs(value) for value in self.asymmetry_ps) * 1e-12
+        if max_asymmetry_s >= 2.0 * self.base_propagation_delay_s:
+            raise ValueError("链路不对称量会导致非正传播时延")

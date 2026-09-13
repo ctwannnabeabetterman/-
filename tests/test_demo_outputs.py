@@ -18,9 +18,7 @@ from config import (
     ThreeExperimentConfig,
 )
 from main_demo import build_demo_settings, run_demo
-from plotting import plot_spectrum
 from results_io import write_csv_columns, write_json
-from waveforms import generate_two_tone
 
 
 class DemoSettingsTests(unittest.TestCase):
@@ -54,21 +52,6 @@ class DemoSettingsTests(unittest.TestCase):
         self.assertEqual(settings.clock_tracking.sync_interval_s, 100e-3)
         self.assertEqual(settings.three_experiment.reply_interval_s, 50e-3)
         self.assertEqual(settings.three_experiment.sync_interval_s, 100e-3)
-
-    def test_spectrum_plot_uses_formula_tx_and_received_iq(self) -> None:
-        waveform = generate_two_tone(build_demo_settings("fast_demo").waveform)
-        rng = np.random.default_rng(17)
-        received = waveform.samples + 0.01 * (
-            rng.standard_normal(waveform.samples.size)
-            + 1j * rng.standard_normal(waveform.samples.size)
-        )
-
-        with tempfile.TemporaryDirectory() as directory:
-            paths = plot_spectrum(waveform, received, directory)
-            sizes = [path.stat().st_size for path in paths]
-
-        self.assertEqual(len(paths), 2)
-        self.assertTrue(all(size > 0 for size in sizes))
 
     def test_small_end_to_end_run_applies_estimator_control_outputs(self) -> None:
         base = build_demo_settings("fast_demo")
@@ -124,9 +107,10 @@ class DemoSettingsTests(unittest.TestCase):
             states["full_sync"]["normalized_ideal_loss_db"],
             states["time_frequency"]["normalized_ideal_loss_db"],
         )
-        self.assertIn("时间同步主结果", result_guide)
-        self.assertIn("QLS + LUT", result_guide)
-        self.assertIn("下游相干合成验证", result_guide)
+        self.assertIn("如何阅读四张图", result_guide)
+        self.assertIn("QLS 与 LUT", result_guide)
+        self.assertIn("三种配置与 CRLB", result_guide)
+        self.assertIn("不能代表论文硬件实验", result_guide)
 
     def test_time_varying_channel_is_shared_by_pilot_and_data(self) -> None:
         base = build_demo_settings("fast_demo")

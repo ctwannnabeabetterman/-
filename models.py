@@ -303,3 +303,15 @@ class ThreeExperimentResult:
     time_transfer_samples_s: FloatArray
     beamforming_samples_s: FloatArray
     residual_clock_rate_samples: FloatArray
+
+
+@dataclass(frozen=True)
+class SensitivityResult:
+    """两类模型失配对时间同步和保持误差的影响。"""
+
+    path_asymmetry_s: FloatArray
+    clock_bias_s: FloatArray
+    clock_std_s: FloatArray
+    reference_phase_noise_rad: FloatArray
+    clock_rate_rmse: FloatArray
+    holdover_timing_rmse_s: FloatArray

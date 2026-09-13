@@ -1,99 +1,90 @@
 # 分布式阵列皮秒级时间同步与相干合成 Demo
 
-本项目是论文 *Wireless Picosecond Time Synchronization for Distributed Antenna Arrays* 的纯 Python 复基带通信仿真。主线是一次发送一个 10 µs、40 MHz 间隔的双音脉冲，经发射采样、传播、AWGN、接收采样、FFT 匹配滤波、三点对数幅度 QLS、LUT 校正和四时间戳双向交换，实现皮秒量级时延估计。频率传递和相干合成用于检验时间同步估计能否驱动后续链路。
+本项目是 *Wireless Picosecond Time Synchronization for Distributed Antenna Arrays* 的纯 Python 复基带通信仿真。它复现论文的时间同步算法链和三种实验拓扑，并验证同步估计可以进入下游相干合成。
 
-载频与信号用途必须分清：
+这里没有 SDR 或 RF 硬件。结果用于检查公式、估计器、协议和参数趋势，不能当作论文硬件测量值。
 
-| 链路 | 论文 RF 参数 | 纯软件实际计算的信号 |
+## 三类信号不能混淆
+
+| 用途 | 论文 RF 参数 | 软件仿真中的实际信号 |
 |---|---|---|
-| 时间传递 | 5.8 GHz 载频，双音间隔 40 MHz | 复基带 ±20 MHz，10 µs 单脉冲，50 ns 升降沿 |
-| 频率传递 | 4.295 GHz 与 4.305 GHz 连续双音 | 两路相对 4.3 GHz 的复包络，自混频得到 10 MHz |
-| 波束赋形读出 | 1.2 GHz 载频，双音间隔 50 MHz | 复基带 ±25 MHz 脉冲和 RX 到达差估计 |
+| 时间传递 | 5.8 GHz，双音间隔 40 MHz | ±20 MHz 复基带双音，10 µs 单脉冲，50 ns 升降沿 |
+| 频率传递 | 4.295/4.305 GHz 连续双音 | 两路相对 4.3 GHz 的复包络，自混频得到连续 10 MHz 参考 |
+| 波束赋形读出 | 1.2 GHz，双音间隔 50 MHz | ±25 MHz 复基带脉冲、接收端到达差与相干功率 |
 
-4.3 GHz 属于频率传递，5.8 GHz 属于时间传递。200 MSa/s 无法直接采样 4.3/5.8 GHz，因此载频作为 RF 元数据和传播相位参数；采样、噪声、匹配滤波及估计在等效复基带中进行。这保留了包络时延和差频参考，也避免数字仿真中的混叠伪信号。
-
-## 论文参数落地
-
-默认时间传递参数来自论文 Table I：
-
-- TX 数字波形采样率 400 MSa/s，RX 采样率 200 MSa/s；
-- 双音间隔 40 MHz，即复基带音点位于 ±20 MHz；
-- 单脉冲持续 10 µs，升降沿 50 ns；
-- 第一、第二个双向脉冲起点相隔 50 ms，一次 epoch 从首脉冲起点到回复脉冲终点为 50.01 ms；
-- 重同步间隔采用 Table I 的 100 ms。
-
-论文正文另有“每 50 ms 重同步”的表述，与 Table I 的 100 ms 不一致。本实现将 50 ms 用作一次双向交换内的回复间隔，将 100 ms 用作相邻同步 epoch 的间隔，并在配置中分别保存为 `reply_interval_s` 与 `sync_interval_s`。正文把波束赋形测试脉冲写成 1 µs，而 Table I 写成 10 µs；三配置统计采用 Table I 的 10 µs。该选择不改变 40 MHz 时间传递波形。
+200 MSa/s 不能直接采样 4.3 或 5.8 GHz。代码把 GHz 载频保存为物理参数，在复基带中生成、传播、加噪、采样和估计。这是标准的等效通信仿真，不会制造数字混叠伪信号。
 
 ## 时间同步链
 
-发射脉冲由公式逐样点生成：
+每次链路测量只发送一个脉冲：
 
 ```text
-s(t) = A w(t) [exp(-j*pi*B*t) + exp(+j*pi*B*t)]
+s(t) = A w(t) [exp(-jπBt) + exp(+jπBt)]
+B = 40 MHz
 ```
 
-其中 `B=40 MHz`，`w(t)` 是 50 ns 升降沿包络，`A` 使活动区平均功率为 1。代码先在 400 MSa/s DAC 网格生成有限脉冲，再由带限均匀重采样器在独立 200 MSa/s ADC 网格生成接收 IQ。接收窗口只依据发送公告时间、公开粗传播时延和前置余量设置，估计器看不到真实钟差或真实传播时延。
+`w(t)` 是长度 10 µs、两端各 50 ns 升余弦边沿的包络，中间保持单位幅度。程序没有给整个脉冲乘 Hann、Hamming 或 Blackman 窗。
 
-对称的 ±20 MHz 复包络相加后，时域实部代数上等于一条 20 MHz 余弦，但上变频后对应 5.780 GHz 与 5.820 GHz 两个 RF 音点。图 01 把同一复包络映射到 80/120 MHz 等效 IF，以可视方式显示 40 MHz 间隔的拍频，并增加三个连续同步历元的脉冲时序：每个方向每次仍只发送一个 10 µs 脉冲，回复间隔 50 ms，重同步间隔 100 ms。图 02 直接对通信链的复 IQ 做 FFT，显示 ±20 MHz 两个谱峰。等效 IF 和协议时序面板只用于说明，不进入时延估计。
-
-代码没有给整个 10 µs 脉冲乘 Hann、Hamming 或 Blackman 窗。唯一包络整形是论文参数规定的起始 50 ns 升余弦上升沿和末尾 50 ns 下降沿，中间约 9.9 µs 保持单位包络。
-
-每次时延测量只发送一个双音脉冲。代码不再添加论文中没有的 BPSK 前导。有限 10 µs 包络提供全局脉冲位置，粗 PPS/调度保证脉冲落入接收窗口；匹配滤波峰附近三个采样点负责亚样点估计。
-
-FFT 匹配滤波计算线性相关：
+完整数据流为：
 
 ```text
-r_mf = IFFT(FFT(r) * conj(FFT(s)))
+400 MSa/s 发射样点
+    → 分数传播时延、复增益和 AWGN
+    → 200 MSa/s 接收样点
+    → FFT 线性匹配滤波
+    → 整数峰
+    → 三点对数幅度 QLS
+    → 周期偏差 LUT
+    → 四时间戳双向钟差估计与校正
 ```
 
-三点 QLS 使用匹配滤波的**对数幅度**：
+200 MSa/s 的采样间隔为 5 ns。皮秒精度来自匹配滤波峰形的亚样点估计和系统偏差校正，并不是把采样率误写成皮秒级。
+
+QLS 使用峰值附近三个点的对数幅度：
 
 ```text
-y[k] = 20*log10(|r_mf[k]|)
-mu = 0.5 * (y[-1] - y[+1]) / (y[-1] - 2*y[0] + y[+1])
-tau_hat = (integer_lag + mu) / fs
+y[k] = 20 log10 |r_mf[k]|
+μ = 0.5 (y[-1] - y[+1]) / (y[-1] - 2y[0] + y[+1])
+τ_hat = (integer_lag + μ) / fs
 ```
 
-这是复现论文 Fig. 4 约 73 ps 周期偏差的关键。若直接对线性幅度拟合，同一波形的峰值偏差只有约 32 ps，与论文曲线不符。当前 400→200 MSa/s 无噪声独立网格验证得到原始 QLS 峰值偏差约 73.65 ps。
+LUT 在一个采样周期内扫描分数时延，反演 QLS 的周期性系统偏差。无噪声 LUT 残差只用于检查插值一致性；实际精度必须看带噪 Monte Carlo。
 
-LUT 在 `[-0.5, 0.5)` 内扫描真实分数样点，保存“QLS 估计位置→系统偏差”的周期映射。正式模式用 2001 个训练点，验收结果来自训练点之间的独立半步网格。LUT 只校正确知插值偏差；噪声下精度必须看 Monte Carlo，不能引用无噪声 LUT 残差。
-
-双向交换保存四个本地时间戳：
+双向交换使用四个本地时间戳：
 
 ```text
-Delta_01 = [(t_RX0 - t_TX1) - (t_RX1 - t_TX0)] / 2
-tau_01   = [(t_RX0 - t_TX1) + (t_RX1 - t_TX0)] / 2
+clock_correction = [(t_RX0 - t_TX1) - (t_RX1 - t_TX0)] / 2
+propagation_delay = [(t_RX0 - t_TX1) + (t_RX1 - t_TX0)] / 2
 ```
 
-接收时间戳由 ADC 首样点本地时间加 QLS/LUT 脉冲起点估计得到。对称链路下，50 ms 回复等待在差分中抵消；非对称上下行时延会以时延差的一半进入钟差估计。
+对称链路下，回复处理时间抵消；上下行传播时延不对称会以时延差的一半进入钟差估计。正式结果的图 04 会直接验证这个限制。
 
-## 频率传递链
+## 论文三种配置
 
-论文在 AP0 发送 4.295/4.305 GHz 连续双音，AP1 接收、放大、滤波和自混频，输出 10 MHz 时钟参考。本实现用两路相对 4.3 GHz 的复包络表示 RF 音调：
-
-```text
-x_low(t)  = exp(j*2*pi*(-5 MHz)*t)
-x_high(t) = exp(j*2*pi*(+5 MHz)*t)
-x_ref(t)  = x_high(t) * conj(x_low(t)) = exp(j*2*pi*10 MHz*t)
-```
-
-代码随后加入等效复 AWGN，以 AP1 采样钟读取 10 MHz 参考，并通过分段相干积累、相位展开和加权直线拟合估计频差。该链路实现双音到 10 MHz 的数学自混频过程，但不声称复现实物混频器、放大器、滤波器和时钟缓冲器的相噪、杂散或温漂。
-
-## 三种实验与相干合成
-
-程序按论文的三个拓扑运行同一估计链：
+正式仿真在 6–36 dB、步长 3 dB 的 SNR 轴上运行：
 
 1. 有线时间传递 + 有线频率参考；
 2. 无线时间传递 + 有线频率参考；
-3. 无线时间传递 + 无线双音自混频参考。
+3. 无线时间传递 + 无线频率参考。
 
-每个 SNR、每个 trial 都运行波形接收、匹配滤波、QLS/LUT、四时间戳校时和下游脉冲读出。SNR 轴为 6:3:36 dB，正式模式每点 1000 次。输出 `12_paper_figure12_three_experiment_precision` 采用与论文 Fig. 12 相近的三面板布局，同时保存 trial 级 CSV。当前信道为静态单径 AWGN，结果用于验证算法链和趋势，不能解释为优于论文硬件测量。
+正式模式每个 SNR、每种配置运行 1000 次。每次都执行接收 IQ、匹配滤波、QLS、LUT、四时间戳校时和下游脉冲读出。无线频率配置还执行 4.295/4.305 GHz 双音复包络自混频和两次 10 MHz 参考观测。
 
-相干合成比较 `unsynchronized`、`time_only`、`time_frequency` 和 `full_sync` 四个状态。时间、采样钟频差、本振频偏、RX 到达差和导频相位权重均来自对应估计器与控制状态；仿真真值只用于生成 IQ、未同步基准和事后评分。
+CRLB 与代码的活动区每样点复 AWGN SNR 使用同一定义。论文 Fig. 12 的 SNR 来自硬件预处理测量，两者只能比较趋势，不能逐点等同。
 
-## 运行与输出
+## 正式结果怎样阅读
 
-固定使用现有 Python 环境：
+`results/formal/README.md` 会先给出结论，再依次解释四张图：
+
+1. `01_system_signal_chain`：信号参数、双音波形、实际 IQ 频谱和三条链路；
+2. `02_qls_lut_validation`：QLS 插值、LUT 确定性校准和带噪 RMSE；
+3. `03_three_config_vs_crlb`：三种配置的软件时间同步结果与 CRLB；
+4. `04_model_mismatch_sensitivity`：链路不对称和 10 MHz 参考相位扰动。
+
+正式目录只保留四组 PNG/PDF、一张 `three_config_summary.csv`、摘要、参数、清单和中文说明。逐试验样本及内部追踪数据默认不生成。
+
+## 运行
+
+固定使用现有环境：
 
 ```powershell
 cd "E:\研究生\研究生科研相关\分布式系统波束赋形\distributed_beamforming_demo"
@@ -101,50 +92,35 @@ cd "E:\研究生\研究生科研相关\分布式系统波束赋形\distributed_b
 & "C:\Users\ct183\anaconda3\envs\gpu_torch\python.exe" main_demo.py --mode formal
 ```
 
-`fast_demo` 与 `formal` 使用同一 10 µs 物理波形和算法链。快速模式只缩小 LUT 网格和随机试验数；正式模式使用 2001 点 LUT、6:3:36 dB、每点 1000 次。
+只有定位算法内部问题时才生成诊断表：
 
-默认结果位于 `results/<mode>/`：
-
-```text
-README.md                         本次运行的指标和结论
-run_config.json                   完整参数
-summary.json                      机器可读摘要
-lut_training.csv                  LUT 训练网格
-lut_bias.csv                      独立验证网格
-monte_carlo.csv                   QLS/LUT/CRLB/双向钟差统计
-three_experiment_summary.csv      三配置曲线
-three_experiment_samples.csv      三配置每个 trial
-figures/01...06                   时间同步主图
-figures/07...10                   频率与相干合成验证
-figures/12_paper_figure12...      三配置 Fig. 12 风格结果
+```powershell
+& "C:\Users\ct183\anaconda3\envs\gpu_torch\python.exe" main_demo.py --mode fast_demo --diagnostics
 ```
 
-双音频谱图由实际有限 IQ 的 FFT 计算。10 µs 时间窗会把理想冲激谱线卷积成有限宽主瓣和旁瓣，因此图上应看到以 ±20 MHz 为中心的两个窄峰，而不会是数学意义上零宽度的两个点。
+一键测试、运行和验收：
+
+```powershell
+.\verify.ps1 -Mode fast_demo
+.\verify.ps1 -Mode formal
+```
 
 ## 代码结构
 
-| 文件 | 职责 |
+| 文件 | 单一职责 |
 |---|---|
-| `waveforms.py` | 10 µs 脉冲双音公式与包络 |
-| `sampling.py` | 400 MSa/s DAC 到 200 MSa/s ADC 带限重采样 |
-| `acquisition.py` | 有限窗口单脉冲接收与检测 |
-| `delay_estimator.py` | FFT 匹配滤波、对数幅度 QLS |
-| `lut_calibration.py` | 400→200 MSa/s 分数栅格扫描和 LUT |
-| `two_way_sync.py` | 单脉冲四时间戳双向时间传递 |
-| `frequency_sync.py` | 4.295/4.305 GHz 复包络自混频与 10 MHz 估计 |
-| `experiment_suite.py` | 三种论文拓扑的 trial 级通信链 |
-| `phase_sync.py`, `beamforming.py` | RX 到达/相位反馈和两 AP 合成 |
-| `main_demo.py` | 参数编排、运行、结果输出 |
-
-## 验证
-
-```powershell
-& "C:\Users\ct183\anaconda3\envs\gpu_torch\python.exe" -m unittest discover -s tests -v
-.\verify.ps1 -Mode fast_demo
-```
-
-测试覆盖单脉冲捕获、不同 TX/RX 栅格、论文约 73 ps QLS 偏差、独立 LUT 验证、处理时延抵消、非对称链路、无真值频差估计、频率自混频、导频反馈、三配置 trial 链及结果阈值。
+| `waveforms.py` | 10 µs、40 MHz 双音脉冲公式 |
+| `sampling.py`, `acquisition.py`, `channel.py` | 发射/接收栅格、信道和有限窗口捕获 |
+| `delay_estimator.py`, `lut_calibration.py` | 匹配滤波、QLS 和 LUT |
+| `two_way_sync.py`, `clock_model.py` | 四时间戳时间传递与本地钟控制 |
+| `frequency_sync.py`, `oscillator_model.py` | 双音自混频 10 MHz 参考与本振控制 |
+| `phase_sync.py`, `beamforming.py` | RX 导频反馈、到达对齐和两 AP 相干合成 |
+| `monte_carlo.py` | QLS/LUT 的独立带噪统计 |
+| `experiment_suite.py` | 三种论文拓扑的完整通信链 |
+| `sensitivity.py` | 不对称链路与参考相位扰动扫描 |
+| `plotting.py`, `reporting.py` | 四张正式图、中文报告与最小输出 |
+| `main_demo.py` | 配置和顶层编排 |
 
 ## 仿真边界
 
-本项目不连接 SDR，也不生成被 200 MSa/s 混叠的 4.3/5.8 GHz 实信号。它没有 ADC/DAC 量化、FPGA 时间戳量化、真实收发切换、RF 群时延、硬件相噪、杂散、温漂和无线多径。CRLB 使用活动区每样点复 AWGN SNR；论文 Fig. 12 的 SNR 来自预处理测量，两者不能逐点等同。论文全无线实验在高 SNR 下约 10 ps 的平台含硬件频率传递链相噪，本软件 AWGN 等效模型不会自动产生相同平台。
+当前模型没有真实 RF 前端群时延、ADC/DAC 量化、FPGA 时间戳量化、收发切换抖动、混频器杂散、真实振荡器相噪、温漂和现场多径。图 04 只对其中两个关键假设做受控扫描。若进入硬件实践，下一步应首先建立线缆/无线通道群时延标定和 10 MHz 参考相噪测量流程。
