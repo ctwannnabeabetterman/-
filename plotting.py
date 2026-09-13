@@ -72,26 +72,65 @@ def save_figure(
 
 
 def plot_time_waveform(waveform: Waveform, output_dir: str | Path) -> list[Path]:
-    """图 1：公式生成的完整脉冲包络与双音拍频局部波形。"""
+    """图 1：RF 双音的等效 IF 拍频与 10 us 脉冲边沿包络。"""
 
     configure_paper_style()
-    fig, (envelope_ax, waveform_ax) = plt.subplots(2, 1, figsize=(7.2, 5.3))
+    fig, (waveform_ax, envelope_ax) = plt.subplots(2, 1, figsize=(7.2, 5.3))
     time_us = waveform.time_s * 1e6
-    envelope_scale = float(np.max(np.abs(waveform.samples)))
-    envelope_ax.plot(time_us, np.abs(waveform.samples), color=_COLORS[0], lw=0.9, label="|s(t)|")
-    envelope_ax.plot(time_us, waveform.envelope * envelope_scale, "k--", lw=1.0, label="Raised-cosine window")
-    envelope_ax.set(ylabel="Magnitude", title="Formula-generated 40 MHz pulsed two-tone")
-    envelope_ax.legend(loc="upper right", ncol=2)
-
     zoom_duration_us = min(0.6, float(time_us[-1]))
-    zoom = time_us <= zoom_duration_us
-    waveform_ax.plot(time_us[zoom], waveform.samples.real[zoom], color=_COLORS[0], lw=0.9)
+    # 200 MSa/s 接收栅格足够用于估计，却不足以把 GHz/高 IF 波形画得
+    # 平滑。此处只为显示按同一公式在 2 GSa/s 细网格重算，不进入算法。
+    display_rate_hz = 2e9
+    display_time_s = np.arange(
+        int(np.floor(zoom_duration_us * 1e-6 * display_rate_hz)) + 1,
+        dtype=np.float64,
+    ) / display_rate_hz
+    spectral_axis_hz = np.fft.fftshift(
+        np.fft.fftfreq(waveform.samples.size, d=1.0 / waveform.sample_rate_hz)
+    )
+    spectral_peak_hz = abs(float(
+        spectral_axis_hz[np.argmax(np.abs(np.fft.fftshift(np.fft.fft(waveform.samples))))]
+    ))
+    display_envelope = np.interp(display_time_s, waveform.time_s, waveform.envelope)
+    display_complex_envelope = display_envelope * (
+        np.exp(-1j * 2.0 * np.pi * spectral_peak_hz * display_time_s)
+        + np.exp(+1j * 2.0 * np.pi * spectral_peak_hz * display_time_s)
+    )
+    center_if_hz = 100e6
+    real_if = np.real(
+        display_complex_envelope
+        * np.exp(1j * 2.0 * np.pi * center_if_hz * display_time_s)
+    )
+    scale = float(np.max(np.abs(real_if)))
+    waveform_ax.plot(display_time_s * 1e6, real_if, color=_COLORS[0], lw=0.8)
+    waveform_ax.plot(
+        display_time_s * 1e6, display_envelope * scale,
+        "k--", lw=0.8, label="50 ns edge envelope",
+    )
+    waveform_ax.plot(
+        display_time_s * 1e6, -display_envelope * scale, "k--", lw=0.8
+    )
     waveform_ax.axhline(0.0, color="black", lw=0.6)
     waveform_ax.set(
-        xlabel="Time (µs)",
-        ylabel="In-phase amplitude",
-        title=f"First {zoom_duration_us:.1f} µs: beating of −20 MHz and +20 MHz",
+        ylabel="Real amplitude",
+        title=(
+            f"First {zoom_duration_us:.1f} µs: 5.780/5.820 GHz RF tones "
+            "shown at 80/120 MHz equivalent IF"
+        ),
     )
+    waveform_ax.legend(loc="upper right")
+
+    envelope_ax.plot(
+        time_us, waveform.envelope, color=_COLORS[1], lw=1.2,
+        label="Pulse envelope w(t)",
+    )
+    envelope_ax.set(
+        xlabel="Time (µs)",
+        ylabel="Envelope",
+        ylim=(-0.05, 1.1),
+        title="10 µs single pulse; raised-cosine shaping only on the 50 ns edges",
+    )
+    envelope_ax.legend(loc="lower center")
     return save_figure(fig, output_dir, "01_two_tone_time_waveform")
 
 
@@ -126,10 +165,14 @@ def plot_spectrum(
     ax.set(
         xlim=(-50.0, 50.0),
         ylim=(-105.0, 3.0),
-        xlabel="Baseband frequency (MHz)",
+        xlabel="Frequency offset from 5.8 GHz carrier (MHz)",
         ylabel="Normalized magnitude (dB)",
-        title="FFT calculated from transmitted and received IQ samples",
+        title="5.780/5.820 GHz time-transfer tones: complex-envelope FFT",
     )
+    ax.annotate("5.780 GHz", xy=(-20.0, 0.0), xytext=(-32.0, -12.0),
+                arrowprops={"arrowstyle": "->", "lw": 0.8})
+    ax.annotate("5.820 GHz", xy=(20.0, 0.0), xytext=(24.0, -12.0),
+                arrowprops={"arrowstyle": "->", "lw": 0.8})
     ax.legend(loc="lower center", ncol=2)
     return save_figure(fig, output_dir, "02_two_tone_spectrum")
 

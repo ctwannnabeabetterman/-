@@ -77,3 +77,20 @@ def generate_two_tone(
         average_active_power=average_active_power,
         energy=energy,
     )
+
+
+def equivalent_real_if(
+    waveform: Waveform,
+    center_if_hz: float,
+) -> NDArray[np.float64]:
+    """把复包络映射为可绘制的实 IF 双音，不直接采样 GHz 载频。
+
+    对默认 ±20 MHz 复包络和 60 MHz IF，输出的两个正频率音点为
+    40 MHz 与 80 MHz，间隔仍为 40 MHz。这只用于检查 RF 双音结构；
+    时延估计器继续处理无混叠的复包络。
+    """
+
+    if not np.isfinite(center_if_hz) or center_if_hz <= 0.0:
+        raise ValueError("center_if_hz 必须为正有限数")
+    carrier = np.exp(1j * 2.0 * np.pi * center_if_hz * waveform.time_s)
+    return np.asarray(np.real(waveform.samples * carrier), dtype=np.float64)

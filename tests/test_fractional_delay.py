@@ -8,7 +8,7 @@ import numpy as np
 
 from channel import add_awgn, apply_fractional_delay, propagate_static_link
 from config import ChannelConfig, WaveformConfig
-from waveforms import generate_two_tone
+from waveforms import equivalent_real_if, generate_two_tone
 
 
 class WaveformConfigTests(unittest.TestCase):
@@ -52,6 +52,20 @@ class TwoToneWaveformTests(unittest.TestCase):
             peak_frequencies_hz,
             [-cfg.tone_separation_hz / 2.0, cfg.tone_separation_hz / 2.0],
             atol=bin_width_hz,
+        )
+
+    def test_equivalent_if_has_two_positive_tones_separated_by_forty_mhz(self) -> None:
+        cfg = WaveformConfig()
+        waveform = generate_two_tone(cfg)
+        real_if = equivalent_real_if(waveform, center_if_hz=60e6)
+        spectrum = np.abs(np.fft.rfft(real_if))
+        frequencies_hz = np.fft.rfftfreq(real_if.size, d=1.0 / cfg.sample_rate_hz)
+        strongest = np.argpartition(spectrum, -2)[-2:]
+
+        np.testing.assert_allclose(
+            np.sort(frequencies_hz[strongest]),
+            [40e6, 80e6],
+            atol=cfg.sample_rate_hz / real_if.size,
         )
 
 class FractionalDelayTests(unittest.TestCase):
