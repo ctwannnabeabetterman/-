@@ -71,11 +71,19 @@ def save_figure(
     return paths
 
 
-def plot_time_waveform(waveform: Waveform, output_dir: str | Path) -> list[Path]:
-    """图 1：RF 双音的等效 IF 拍频与 10 us 脉冲边沿包络。"""
+def plot_time_waveform(
+    waveform: Waveform,
+    output_dir: str | Path,
+    *,
+    reply_interval_s: float = 50e-3,
+    sync_interval_s: float = 100e-3,
+) -> list[Path]:
+    """图 1：双音、单脉冲包络和重复双向同步协议时序。"""
 
     configure_paper_style()
-    fig, (waveform_ax, envelope_ax) = plt.subplots(2, 1, figsize=(7.2, 5.3))
+    fig, (waveform_ax, envelope_ax, protocol_ax) = plt.subplots(
+        3, 1, figsize=(7.8, 7.2), gridspec_kw={"height_ratios": (1.4, 0.8, 0.9)}
+    )
     time_us = waveform.time_s * 1e6
     zoom_duration_us = min(0.6, float(time_us[-1]))
     # 200 MSa/s 接收栅格足够用于估计，却不足以把 GHz/高 IF 波形画得
@@ -105,7 +113,7 @@ def plot_time_waveform(waveform: Waveform, output_dir: str | Path) -> list[Path]
     waveform_ax.plot(display_time_s * 1e6, real_if, color=_COLORS[0], lw=0.8)
     waveform_ax.plot(
         display_time_s * 1e6, display_envelope * scale,
-        "k--", lw=0.8, label="50 ns edge envelope",
+        "k--", lw=0.8, label="± envelope: 50 ns raised-cosine edges",
     )
     waveform_ax.plot(
         display_time_s * 1e6, -display_envelope * scale, "k--", lw=0.8
@@ -114,15 +122,15 @@ def plot_time_waveform(waveform: Waveform, output_dir: str | Path) -> list[Path]
     waveform_ax.set(
         ylabel="Real amplitude",
         title=(
-            f"First {zoom_duration_us:.1f} µs: 5.780/5.820 GHz RF tones "
-            "shown at 80/120 MHz equivalent IF"
+            f"One transmitted pulse, first {zoom_duration_us:.1f} µs: "
+            "5.780/5.820 GHz tones shown at 80/120 MHz display IF"
         ),
     )
     waveform_ax.legend(loc="upper right")
 
     envelope_ax.plot(
         time_us, waveform.envelope, color=_COLORS[1], lw=1.2,
-        label="Pulse envelope w(t)",
+        label="One 10 µs pulse used by one link measurement",
     )
     envelope_ax.set(
         xlabel="Time (µs)",
@@ -131,6 +139,41 @@ def plot_time_waveform(waveform: Waveform, output_dir: str | Path) -> list[Path]
         title="10 µs single pulse; raised-cosine shaping only on the 50 ns edges",
     )
     envelope_ax.legend(loc="lower center")
+
+    epoch_starts_ms = np.arange(3, dtype=np.float64) * sync_interval_s * 1e3
+    replies_ms = epoch_starts_ms + reply_interval_s * 1e3
+    protocol_ax.vlines(
+        epoch_starts_ms,
+        0.0,
+        1.0,
+        color=_COLORS[0],
+        lw=2.0,
+        label="AP1→AP0: one 10 µs pulse",
+    )
+    protocol_ax.scatter(epoch_starts_ms, np.ones(3), color=_COLORS[0], s=22)
+    protocol_ax.vlines(
+        replies_ms,
+        0.0,
+        -1.0,
+        color=_COLORS[1],
+        lw=2.0,
+        label="AP0→AP1 reply: one 10 µs pulse",
+    )
+    protocol_ax.scatter(replies_ms, -np.ones(3), color=_COLORS[1], s=22)
+    protocol_ax.axhline(0.0, color="black", lw=0.6)
+    protocol_ax.set(
+        xlim=(-5.0, replies_ms[-1] + 5.0),
+        ylim=(-1.25, 1.25),
+        xlabel="Protocol time (ms)",
+        ylabel="Direction",
+        yticks=(-1.0, 1.0),
+        yticklabels=("reply", "request"),
+        title=(
+            "Repeated synchronization epochs: 50 ms reply interval, "
+            "100 ms resynchronization interval"
+        ),
+    )
+    protocol_ax.legend(loc="upper center", ncol=2, fontsize=8)
     return save_figure(fig, output_dir, "01_two_tone_time_waveform")
 
 
@@ -160,14 +203,27 @@ def plot_spectrum(
     tx_frequency_mhz, tx_db = spectrum_db(waveform.samples)
     rx_frequency_mhz, rx_db = spectrum_db(rx)
     fig, ax = plt.subplots(figsize=(7.2, 3.9))
-    ax.plot(tx_frequency_mhz, tx_db, color=_COLORS[0], lw=0.9, label="Formula TX pulse")
-    ax.plot(rx_frequency_mhz, rx_db, color=_COLORS[1], lw=0.8, alpha=0.75, label="RX after delay + AWGN")
+    ax.plot(
+        tx_frequency_mhz,
+        tx_db,
+        color=_COLORS[0],
+        lw=0.9,
+        label="TX 5.780/5.820 GHz two-tone pulse (complex envelope)",
+    )
+    ax.plot(
+        rx_frequency_mhz,
+        rx_db,
+        color=_COLORS[1],
+        lw=0.8,
+        alpha=0.75,
+        label="RX IQ after propagation delay and AWGN",
+    )
     ax.set(
         xlim=(-50.0, 50.0),
         ylim=(-105.0, 3.0),
         xlabel="Frequency offset from 5.8 GHz carrier (MHz)",
         ylabel="Normalized magnitude (dB)",
-        title="5.780/5.820 GHz time-transfer tones: complex-envelope FFT",
+        title="5.8 GHz synchronization signal: two RF tones spaced by 40 MHz",
     )
     ax.annotate("5.780 GHz", xy=(-20.0, 0.0), xytext=(-32.0, -12.0),
                 arrowprops={"arrowstyle": "->", "lw": 0.8})

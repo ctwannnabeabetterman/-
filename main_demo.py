@@ -799,7 +799,12 @@ def run_demo(settings: DemoSettings, output_dir: str | Path) -> dict[str, object
     )
 
     figure_paths: list[Path] = []
-    figure_paths += plot_time_waveform(waveform, figures_dir)
+    figure_paths += plot_time_waveform(
+        waveform,
+        figures_dir,
+        reply_interval_s=settings.three_experiment.reply_interval_s,
+        sync_interval_s=settings.clock_tracking.sync_interval_s,
+    )
     figure_paths += plot_spectrum(waveform, delay_observation.samples, figures_dir)
     figure_paths += plot_correlation_qls(
         correlation, raw_delay, settings.waveform.sample_rate_hz, figures_dir
