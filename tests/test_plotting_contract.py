@@ -56,8 +56,8 @@ class FormalPlotContractTests(unittest.TestCase):
             beamforming_std_s=np.array(
                 [[30, 10, 3], [32, 11, 3.5], [40, 16, 7]], dtype=float
             ) * 1e-12,
-            crlb_std_s=np.array([18, 6, 2], dtype=float) * 1e-12,
-            crlb_best_case_std_s=np.array([13, 4.2, 1.4], dtype=float) * 1e-12,
+            one_way_delay_crlb_std_s=np.array([18, 6, 2], dtype=float) * 1e-12,
+            two_way_clock_crlb_std_s=np.array([13, 4.2, 1.4], dtype=float) * 1e-12,
             residual_clock_rate_rmse=np.ones((3, 3)) * 1e-9,
             acquisition_failure_rate=np.zeros((3, 3)),
             time_transfer_samples_s=np.zeros((3, 3, 2)),

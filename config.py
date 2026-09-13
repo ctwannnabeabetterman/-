@@ -346,7 +346,6 @@ class ThreeExperimentConfig:
     beamforming_carrier_frequency_hz: float = 1.2e9
     receiver_margin_s: float = 2e-6
     data_gate_half_width_samples: float = 2.5
-    snr_uncertainty_db: float = 3.0
 
     def __post_init__(self) -> None:
         values = (
@@ -365,7 +364,6 @@ class ThreeExperimentConfig:
             self.beamforming_carrier_frequency_hz,
             self.receiver_margin_s,
             self.data_gate_half_width_samples,
-            self.snr_uncertainty_db,
         )
         if not self.snr_db_values or not all(math.isfinite(value) for value in values):
             raise ValueError("三配置实验参数必须为有限数且 SNR 轴非空")
@@ -387,8 +385,6 @@ class ThreeExperimentConfig:
             raise ValueError("三配置实验传播时延必须非负")
         if self.wireless_clock_rate_offset <= -1.0:
             raise ValueError("无线频率参考前的采样时钟速率必须为正")
-        if self.snr_uncertainty_db < 0.0:
-            raise ValueError("SNR 不确定度必须非负")
 
 
 @dataclass(frozen=True)

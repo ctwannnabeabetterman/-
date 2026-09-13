@@ -170,24 +170,31 @@ def plot_system_signal_chain(
         (
             "时间传递",
             "5.8 GHz ± 20 MHz\n40 MHz 间隔，10 µs 脉冲",
-            "IQ → 匹配滤波 → QLS → LUT → 四时间戳",
+            "IQ → 匹配滤波 → QLS\n→ LUT → 四时间戳",
         ),
         (
             "频率传递",
             f"{low_hz / 1e9:.3f}/{high_hz / 1e9:.3f} GHz 连续双音",
-            "自混频 → 10 MHz 参考 → 采样钟速率估计",
+            "自混频 → 10 MHz 参考\n→ 采样钟速率估计",
         ),
         (
             "下游验证",
             "1.2 GHz，50 MHz 双音脉冲",
-            "时间/频率/相位估计 → 两 AP 相干合成",
+            "时间/频率/相位估计\n→ 两 AP 相干合成",
         ),
     )
     for row_index, (purpose, signal, processing) in enumerate(rows):
         y = 0.82 - row_index * 0.32
         chain_axis.text(0.02, y, purpose, weight="bold", transform=chain_axis.transAxes)
         chain_axis.text(0.24, y, signal, transform=chain_axis.transAxes, va="center")
-        chain_axis.text(0.63, y, processing, transform=chain_axis.transAxes, va="center")
+        chain_axis.text(
+            0.63,
+            y,
+            processing,
+            transform=chain_axis.transAxes,
+            va="center",
+            fontsize=8.5,
+        )
         chain_axis.annotate(
             "",
             xy=(0.61, y),
@@ -272,6 +279,16 @@ def plot_qls_lut_validation(
         title="(b) 独立栅格上的确定性插值检查",
     )
     lut_axis.legend(loc="lower center")
+    residual_axis = lut_axis.inset_axes([0.56, 0.57, 0.40, 0.34])
+    residual_axis.plot(
+        validation.true_fraction_samples,
+        corrected_bias_ps,
+        color=_COLORS[1],
+        lw=0.9,
+    )
+    residual_axis.set_title("校正残差放大", fontsize=8)
+    residual_axis.tick_params(labelsize=7)
+    residual_axis.grid(True, alpha=0.2)
 
     rmse_axis.semilogy(
         monte_carlo.snr_db,
@@ -334,10 +351,10 @@ def plot_three_config_vs_crlb(
         )
     axis.semilogy(
         result.snr_db,
-        result.crlb_std_s * 1e12,
+        result.two_way_clock_crlb_std_s * 1e12,
         "k--",
         lw=1.3,
-        label="CRLB（同一仿真 SNR 定义）",
+        label="双向钟差 CRLB（单向时延 CRLB / √2）",
     )
     axis.set(
         xlabel="时间传递接收端活动区复 AWGN SNR (dB)",

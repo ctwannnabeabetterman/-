@@ -296,8 +296,8 @@ class ThreeExperimentResult:
     snr_db: FloatArray
     time_transfer_std_s: FloatArray
     beamforming_std_s: FloatArray
-    crlb_std_s: FloatArray
-    crlb_best_case_std_s: FloatArray
+    one_way_delay_crlb_std_s: FloatArray
+    two_way_clock_crlb_std_s: FloatArray
     residual_clock_rate_rmse: FloatArray
     acquisition_failure_rate: FloatArray
     time_transfer_samples_s: FloatArray

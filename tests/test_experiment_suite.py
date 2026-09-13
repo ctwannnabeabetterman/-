@@ -43,6 +43,12 @@ class ThreeExperimentSuiteTests(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(result.time_transfer_std_s)))
         self.assertTrue(np.all(np.isfinite(result.beamforming_std_s)))
         self.assertEqual(result.frequency_link_modes[-1], "wireless")
+        np.testing.assert_allclose(
+            result.two_way_clock_crlb_std_s,
+            result.one_way_delay_crlb_std_s / np.sqrt(2.0),
+            rtol=1e-12,
+            atol=0.0,
+        )
 
     def test_continuous_wireless_reference_uses_separated_iq_captures(self) -> None:
         waveform = WaveformConfig(pulse_duration_s=2e-6)

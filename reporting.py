@@ -65,7 +65,10 @@ def write_result_tables(
                 "time_transfer_std_ps": result.time_transfer_std_s.reshape(-1) * 1e12,
                 "beamforming_interarrival_std_ps": result.beamforming_std_s.reshape(-1)
                 * 1e12,
-                "crlb_std_ps": np.tile(result.crlb_std_s * 1e12, len(result.profile_keys)),
+                "two_way_clock_crlb_std_ps": np.tile(
+                    result.two_way_clock_crlb_std_s * 1e12,
+                    len(result.profile_keys),
+                ),
                 "residual_clock_rate_rmse_ppm": result.residual_clock_rate_rmse.reshape(-1)
                 * 1e6,
                 "acquisition_failure_rate": result.acquisition_failure_rate.reshape(-1),

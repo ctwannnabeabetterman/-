@@ -357,7 +357,7 @@ def run_three_experiment_suite(
         ],
         dtype=np.float64,
     )
-    crlb_best = crlb_std * 10.0 ** (-config.snr_uncertainty_db / 20.0)
+    two_way_clock_crlb = crlb_std / np.sqrt(2.0)
     return ThreeExperimentResult(
         profile_keys=tuple(profile.key for profile in profiles),
         profile_labels=tuple(profile.label for profile in profiles),
@@ -366,8 +366,8 @@ def run_three_experiment_suite(
         snr_db=snr_axis,
         time_transfer_std_s=np.asarray(time_std, dtype=np.float64),
         beamforming_std_s=np.asarray(beamforming_std, dtype=np.float64),
-        crlb_std_s=crlb_std,
-        crlb_best_case_std_s=np.asarray(crlb_best, dtype=np.float64),
+        one_way_delay_crlb_std_s=crlb_std,
+        two_way_clock_crlb_std_s=np.asarray(two_way_clock_crlb, dtype=np.float64),
         residual_clock_rate_rmse=np.asarray(rate_rmse, dtype=np.float64),
         acquisition_failure_rate=failure_rate,
         time_transfer_samples_s=time_samples,
