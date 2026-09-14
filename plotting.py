@@ -356,6 +356,27 @@ def plot_three_config_vs_crlb(
         lw=1.3,
         label="双向钟差 CRLB（单向时延 CRLB / √2）",
     )
+    first_snr = float(result.snr_db[0])
+    second_snr = (
+        float(result.snr_db[1]) if result.snr_db.size > 1 else first_snr + 1.0
+    )
+    threshold_edge = 0.5 * (first_snr + second_snr)
+    axis.axvspan(
+        first_snr - 0.6,
+        threshold_edge,
+        color="tab:red",
+        alpha=0.08,
+        zorder=0,
+    )
+    axis.annotate(
+        "低 SNR 门限区\n捕获/错误峰粗差；CRLB 不包含此类错误",
+        xy=(first_snr, float(np.max(result.time_transfer_std_s[:, 0]) * 1e12)),
+        xytext=(second_snr + 1.0, 260.0),
+        arrowprops={"arrowstyle": "->", "color": "dimgray", "lw": 0.9},
+        fontsize=8.5,
+        color="dimgray",
+        ha="left",
+    )
     axis.set(
         xlabel="时间传递接收端活动区复 AWGN SNR (dB)",
         ylabel="双向时间同步标准差 (ps)",

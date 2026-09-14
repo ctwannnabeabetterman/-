@@ -502,6 +502,7 @@ def run_demo(
         validation.corrected_error_samples / settings.waveform.sample_rate_hz
     )
     beamforming_summary = _beamforming_summary(beamforming_states)
+    threshold_next_index = min(1, three_experiment.snr_db.size - 1)
     profile_labels_cn = {
         "cabled": "有线时间 + 有线频率",
         "wireless_time": "无线时间 + 有线频率",
@@ -600,6 +601,32 @@ def run_demo(
         },
         "three_experiments": {
             "statistic": "sample standard deviation, ddof=1",
+            "threshold_region": {
+                "snr_db": float(three_experiment.snr_db[0]),
+                "time_transfer_std_ps": {
+                    key: float(three_experiment.time_transfer_std_s[index, 0] * 1e12)
+                    for index, key in enumerate(three_experiment.profile_keys)
+                },
+                "two_way_clock_crlb_std_ps": float(
+                    three_experiment.two_way_clock_crlb_std_s[0] * 1e12
+                ),
+                "acquisition_failure_rate": {
+                    key: float(three_experiment.acquisition_failure_rate[index, 0])
+                    for index, key in enumerate(three_experiment.profile_keys)
+                },
+                "next_snr_db": float(three_experiment.snr_db[threshold_next_index]),
+                "next_time_transfer_std_ps": {
+                    key: float(
+                        three_experiment.time_transfer_std_s[index, threshold_next_index]
+                        * 1e12
+                    )
+                    for index, key in enumerate(three_experiment.profile_keys)
+                },
+                "next_two_way_clock_crlb_std_ps": float(
+                    three_experiment.two_way_clock_crlb_std_s[threshold_next_index]
+                    * 1e12
+                ),
+            },
             "profiles": {
                 key: {
                     "label": label,

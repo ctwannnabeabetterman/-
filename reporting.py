@@ -87,9 +87,14 @@ def render_report(summary: Mapping[str, object]) -> str:
     waveform = summary["waveform"]
     lut = summary["lut"]
     monte_carlo = summary["monte_carlo_highest_snr"]
-    profiles = summary["three_experiments"]["profiles"]
+    three_experiments = summary["three_experiments"]
+    profiles = three_experiments["profiles"]
+    threshold = three_experiments["threshold_region"]
     full_sync = summary["beamforming"]["full_sync"]
     sensitivity = summary["sensitivity"]
+    threshold_std = list(threshold["time_transfer_std_ps"].values())
+    threshold_failure = list(threshold["acquisition_failure_rate"].values())
+    next_std = list(threshold["next_time_transfer_std_ps"].values())
     profile_rows = "\n".join(
         "| {label} | {time:.3f} | {beam:.3f} | {rate:.6f} | {failure:.3%} |".format(
             label=profile.get("label_cn", profile.get("label", key)),
@@ -116,7 +121,7 @@ def render_report(summary: Mapping[str, object]) -> str:
 
 1. **图 01：系统、信号与链路。**图区分 5.8 GHz 时间传递、4.295/4.305 GHz 频率传递和 1.2 GHz 下游验证。频谱由实际有限 IQ 的 FFT 得到；10 µs 包络使两个谱峰具有有限主瓣和旁瓣。
 2. **图 02：QLS 与 LUT。**左图说明三个匹配滤波样点怎样插值得到亚样点峰；中图只是无噪声的确定性 LUT 插值检查；右图的带噪 Monte Carlo 才是性能结果。
-3. **图 03：三种配置与 CRLB。**这是主结果，逐个 SNR 比较有线时间+有线频率、无线时间+有线频率、无线时间+无线频率和 CRLB。
+3. **图 03：三种配置与 CRLB。**这是主结果，逐个 SNR 比较有线时间+有线频率、无线时间+有线频率、无线时间+无线频率和 CRLB。最低 SNR 点属于捕获与峰值选择的门限效应区，不能按局部 CRLB 解读。
 4. **图 04：模型失配。**该扩展展示上下行时延不对称和 10 MHz 参考相位扰动怎样破坏理想仿真结果。
 
 ## QLS 与 LUT 验证
@@ -130,6 +135,10 @@ def render_report(summary: Mapping[str, object]) -> str:
 {profile_rows}
 
 三个配置每个统计点都运行 IQ 捕获、匹配滤波、整数峰、对数幅度 QLS、LUT 和四时间戳双向校时。频率为无线的配置还运行 4.295/4.305 GHz 双音的复包络自混频与 10 MHz 参考观测。`three_config_summary.csv` 保存所有 SNR 汇总，不在正式目录堆放逐试验样本。
+
+### 低 SNR 门限效应
+
+在 {threshold['snr_db']:.0f} dB 时，三种配置的时间同步标准差为 {min(threshold_std):.3f}–{max(threshold_std):.3f} ps，而双向钟差 CRLB 为 {threshold['two_way_clock_crlb_std_ps']:.3f} ps，捕获失败率为 {min(threshold_failure):.3%}–{max(threshold_failure):.3%}。低 SNR 下少量捕获失败和搜索门内错误峰会主导样本标准差；CRLB 是局部无偏时延估计的下界，不包含捕获错误和粗差。在 {threshold['next_snr_db']:.0f} dB 时，三种配置已回到 {min(next_std):.3f}–{max(next_std):.3f} ps，对应 CRLB 为 {threshold['next_two_way_clock_crlb_std_ps']:.3f} ps。该门限效应是仿真链路的实际输出，不应删点或隐藏。
 
 ## 模型失配结果
 

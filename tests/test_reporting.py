@@ -55,6 +55,27 @@ class ReportingTests(unittest.TestCase):
                 "acquisition_failure_rate": 0.0,
             },
             "three_experiments": {
+                "threshold_region": {
+                    "snr_db": 6.0,
+                    "time_transfer_std_ps": {
+                        "cabled": 565.0,
+                        "wireless_time": 400.0,
+                        "wireless_time_frequency": 562.0,
+                    },
+                    "two_way_clock_crlb_std_ps": 44.6,
+                    "acquisition_failure_rate": {
+                        "cabled": 0.005,
+                        "wireless_time": 0.004,
+                        "wireless_time_frequency": 0.003,
+                    },
+                    "next_snr_db": 9.0,
+                    "next_time_transfer_std_ps": {
+                        "cabled": 32.5,
+                        "wireless_time": 31.8,
+                        "wireless_time_frequency": 31.7,
+                    },
+                    "next_two_way_clock_crlb_std_ps": 31.6,
+                },
                 "profiles": {
                     key: {
                         "label_cn": label,
@@ -92,6 +113,9 @@ class ReportingTests(unittest.TestCase):
             "模型失配",
             "不能代表论文硬件实验",
             "如何阅读四张图",
+            "门限效应",
+            "400.000–565.000 ps",
+            "CRLB 是局部无偏时延估计的下界",
         ):
             self.assertIn(phrase, text)
 
